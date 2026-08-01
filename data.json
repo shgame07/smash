@@ -1,236 +1,69 @@
-/**
- * SMASH!! -lite- バックエンド (Google Apps Script)
- * ------------------------------------------------------
- * デプロイ方法:
- * 1. Google スプレッドシートを新規作成する
- * 2. シート名を "Players" にする（自動でヘッダーが作られます）
- * 3. 拡張機能 > Apps Script を開き、このファイルの中身を貼り付ける
- * 4. デプロイ > 新しいデプロイ > 種類「ウェブアプリ」
- *    - 実行するユーザー: 自分
- *    - アクセスできるユーザー: 全員
- * 5. 発行されたウェブアプリURLを index.html の CONFIG.API_URL に設定する
- * ------------------------------------------------------
- */
-
-const SHEET_NAME = "Players";
-const HEADERS = [
-  "playerId", "name", "password",
-  "highScore", "totalPlays", "totalKills", "totalPlayTimeSec",
-  "equippedSkin", "equippedAttack", "equippedSpecial",
-  "ownedSkins", "ownedAttacks", "ownedSpecials",
-  "points", "createdAt", "updatedAt",
-  "favorites"
-];
-
-function getSheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_NAME);
-  }
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow(HEADERS);
-  }
-  return sheet;
-}
-
-function jsonOut_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-function doPost(e) {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    const req = JSON.parse(e.postData.contents);
-    const action = req.action;
-    let result;
-    switch (action) {
-      case "register":
-        result = doRegister_(req);
-        break;
-      case "login":
-        result = doLogin_(req);
-        break;
-      case "save":
-        result = doSave_(req);
-        break;
-      case "changePassword":
-        result = doChangePassword_(req);
-        break;
-      case "submitScore":
-        result = doSubmitScore_(req);
-        break;
-      case "getRanking":
-        result = doGetRanking_(req);
-        break;
-      default:
-        result = { ok: false, error: "unknown action" };
+{
+  "skins": [
+    { "id": "skin_001", "name": "ノーマル",       "emoji": "🤸",        "rarity": "N",   "isDefault": true },
+    { "id": "skin_002", "name": "ゆきだるま",     "emoji": "⛄",        "rarity": "N",   "isDefault": false },
+    { "id": "skin_003", "name": "フェニックス",   "emoji": "🐦‍🔥",       "rarity": "SR",  "isDefault": false },
+    { "id": "skin_004", "name": "妖精",           "emoji": "🧚",        "rarity": "R",   "isDefault": false },
+    { "id": "skin_005", "name": "バクテリア",     "emoji": "🦠",        "rarity": "N",   "isDefault": false },
+    { "id": "skin_006", "name": "イーグル",       "emoji": "🦅",        "rarity": "R",   "isDefault": false },
+    { "id": "skin_007", "name": "バレエダンサー", "emoji": "🧑‍🩰",       "rarity": "SSR", "isDefault": false }
+  ],
+  "attacks": [
+    {
+      "id": "attack_001",
+      "name": "殴り",
+      "effect": "🔅",
+      "power": 10,
+      "cost": 5,
+      "range": 1,
+      "angle": 90,
+      "pierce": false,
+      "knockback": "small",
+      "rarity": "N",
+      "isDefault": true
     }
-    return jsonOut_(result);
-  } catch (err) {
-    return jsonOut_({ ok: false, error: String(err) });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function doGet(e) {
-  return jsonOut_({ ok: true, message: "SMASH!! -lite- API is running" });
-}
-
-// ------- ユーティリティ -------
-
-function findRowByPlayerId_(sheet, playerId) {
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][0]) === String(playerId)) {
-      return { rowIndex: i + 1, row: data[i] };
+  ],
+  "specials": [
+    {
+      "id": "skill_001",
+      "name": "マジ殴り",
+      "effect": "🔆",
+      "power": 20,
+      "cost": 5,
+      "range": 3,
+      "angle": 90,
+      "pierce": true,
+      "knockback": "medium",
+      "rarity": "N",
+      "isDefault": true
     }
+  ],
+  "enemies": [
+    { "id": "enemy_001", "name": "👾", "hp": 20, "atk": 5, "atkIntervalSec": 2.0, "isDefault": true }
+  ],
+  "difficulty": [
+    { "time": 0,   "label": "EASY",         "icon": "🟢", "spawnInterval": 10.0, "maxEnemies": 3 },
+    { "time": 20,  "label": "EASY+",        "icon": "🟢", "spawnInterval": 7.0,  "maxEnemies": 3 },
+    { "time": 40,  "label": "NORMAL",       "icon": "🟡", "spawnInterval": 5.0,  "maxEnemies": 3 },
+    { "time": 60,  "label": "NORMAL+",      "icon": "🟡", "spawnInterval": 4.0,  "maxEnemies": 5 },
+    { "time": 80,  "label": "HARD",         "icon": "🟠", "spawnInterval": 3.2,  "maxEnemies": 5 },
+    { "time": 100, "label": "HARD+",        "icon": "🟠", "spawnInterval": 2.5,  "maxEnemies": 5 },
+    { "time": 120, "label": "EXPERT",       "icon": "🔴", "spawnInterval": 2.0,  "maxEnemies": 7 },
+    { "time": 140, "label": "EXPERT+",      "icon": "🔴", "spawnInterval": 1.6,  "maxEnemies": 7 },
+    { "time": 160, "label": "SMASH!!",      "icon": "🟣", "spawnInterval": 1.3,  "maxEnemies": 7 },
+    { "time": 180, "label": "LIMIT BREAK",  "icon": "⚫", "spawnInterval": 1.0,  "maxEnemies": null }
+  ],
+  "config": {
+    "specialGaugePerKill": 25,
+    "comboTimeoutMs": 3000,
+    "pointsPerScoreDivisor": 10,
+    "gachaCostPoints": 1000,
+    "maxCostTotal": 10,
+    "playerHp": 100,
+    "spawnPoints": [
+      { "pos": "left",   "xRatio": 0.15, "weight": 25 },
+      { "pos": "center", "xRatio": 0.5,  "weight": 50 },
+      { "pos": "right",  "xRatio": 0.85, "weight": 25 }
+    ]
   }
-  return null;
-}
-
-function rowToObject_(row) {
-  const obj = {};
-  HEADERS.forEach((h, i) => { obj[h] = row[i]; });
-  ["ownedSkins", "ownedAttacks", "ownedSpecials", "favorites"].forEach((k) => {
-    try { obj[k] = JSON.parse(obj[k] || "[]"); } catch (err) { obj[k] = []; }
-  });
-  if (!Array.isArray(obj.favorites) || obj.favorites.length !== 3) {
-    obj.favorites = [null, null, null];
-  }
-  return obj;
-}
-
-function generatePlayerId_(sheet) {
-  const existing = sheet.getDataRange().getValues().slice(1).map((r) => String(r[0]));
-  let id;
-  do {
-    id = String(Math.floor(10000000 + Math.random() * 90000000));
-  } while (existing.indexOf(id) !== -1);
-  return id;
-}
-
-function generatePassword_() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const len = 8 + Math.floor(Math.random() * 5); // 8~12文字
-  let pw = "";
-  for (let i = 0; i < len; i++) {
-    pw += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return pw;
-}
-
-// ------- アクション処理 -------
-
-function doRegister_(req) {
-  const sheet = getSheet_();
-  const playerId = generatePlayerId_(sheet);
-  const password = generatePassword_();
-  const now = new Date().toISOString();
-  const row = [
-    playerId, req.name || "PLAYER", password,
-    0, 0, 0, 0,
-    "skin_001", "attack_001", "skill_001",
-    JSON.stringify(["skin_001"]), JSON.stringify(["attack_001"]), JSON.stringify(["skill_001"]),
-    0, now, now,
-    JSON.stringify([null, null, null])
-  ];
-  sheet.appendRow(row);
-  return { ok: true, player: rowToObject_(row) };
-}
-
-function doLogin_(req) {
-  const sheet = getSheet_();
-  const found = findRowByPlayerId_(sheet, req.playerId);
-  if (!found) return { ok: false, error: "プレイヤーIDが見つかりません" };
-  if (String(found.row[2]) !== String(req.password)) {
-    return { ok: false, error: "パスワードが違います" };
-  }
-  return { ok: true, player: rowToObject_(found.row) };
-}
-
-function doSave_(req) {
-  const sheet = getSheet_();
-  const found = findRowByPlayerId_(sheet, req.playerId);
-  if (!found) return { ok: false, error: "プレイヤーが見つかりません" };
-  const current = rowToObject_(found.row);
-  const merged = Object.assign({}, current, req.data || {});
-  ["ownedSkins", "ownedAttacks", "ownedSpecials", "favorites"].forEach((k) => {
-    if (Array.isArray(merged[k])) merged[k] = JSON.stringify(merged[k]);
-  });
-  merged.updatedAt = new Date().toISOString();
-  const newRow = HEADERS.map((h) => merged[h]);
-  sheet.getRange(found.rowIndex, 1, 1, HEADERS.length).setValues([newRow]);
-  return { ok: true, player: rowToObject_(newRow) };
-}
-
-function doChangePassword_(req) {
-  const sheet = getSheet_();
-  const found = findRowByPlayerId_(sheet, req.playerId);
-  if (!found) return { ok: false, error: "プレイヤーが見つかりません" };
-  if (String(found.row[2]) !== String(req.oldPassword)) {
-    return { ok: false, error: "現在のパスワードが違います" };
-  }
-  sheet.getRange(found.rowIndex, 3).setValue(req.newPassword);
-  sheet.getRange(found.rowIndex, 16).setValue(new Date().toISOString());
-  return { ok: true };
-}
-
-function doSubmitScore_(req) {
-  const sheet = getSheet_();
-  const found = findRowByPlayerId_(sheet, req.playerId);
-  if (!found) return { ok: false, error: "プレイヤーが見つかりません" };
-  const current = rowToObject_(found.row);
-
-  const score = req.score || 0;
-  const isNewRecord = score > Number(current.highScore || 0);
-  const newHighScore = isNewRecord ? score : current.highScore;
-  const addedPoints = Math.floor(score / 10);
-
-  const updates = {
-    highScore: newHighScore,
-    totalPlays: Number(current.totalPlays || 0) + 1,
-    totalKills: Number(current.totalKills || 0) + Number(req.kills || 0),
-    totalPlayTimeSec: Number(current.totalPlayTimeSec || 0) + Number(req.survivalTime || 0),
-    points: Number(current.points || 0) + addedPoints,
-    updatedAt: new Date().toISOString()
-  };
-  const merged = Object.assign({}, current, updates);
-  ["ownedSkins", "ownedAttacks", "ownedSpecials", "favorites"].forEach((k) => {
-    if (Array.isArray(merged[k])) merged[k] = JSON.stringify(merged[k]);
-  });
-  const newRow = HEADERS.map((h) => merged[h]);
-  sheet.getRange(found.rowIndex, 1, 1, HEADERS.length).setValues([newRow]);
-
-  return {
-    ok: true,
-    isNewRecord: isNewRecord,
-    highScore: newHighScore,
-    points: updates.points,
-    addedPoints: addedPoints
-  };
-}
-
-function doGetRanking_(req) {
-  const sheet = getSheet_();
-  const data = sheet.getDataRange().getValues().slice(1);
-  const players = data.map((r) => ({
-    playerId: String(r[0]),
-    name: r[1],
-    score: Number(r[3]) || 0
-  }));
-  players.sort((a, b) => b.score - a.score);
-
-  const top10 = players.slice(0, 10);
-  let myRank = null;
-  for (let i = 0; i < players.length; i++) {
-    if (players[i].playerId === String(req.playerId)) {
-      myRank = { rank: i + 1, name: players[i].name, score: players[i].score };
-      break;
-    }
-  }
-  return { ok: true, top10: top10, myRank: myRank };
 }
