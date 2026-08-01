@@ -1,0 +1,36 @@
+{
+  "skins": [
+    { "id": "skin_001", "name": "ノーマル",       "emoji": "🤸",        "rarity": "N",   "isDefault": true },
+    { "id": "skin_002", "name": "ゆきだるま",     "emoji": "⛄",        "rarity": "N",   "isDefault": false },
+    { "id": "skin_003", "name": "フェニックス",   "emoji": "🐦‍🔥",       "rarity": "SR",  "isDefault": false },
+    { "id": "skin_004", "name": "妖精",           "emoji": "🧚",        "rarity": "R",   "isDefault": false },
+    { "id": "skin_005", "name": "バクテリア",     "emoji": "🦠",        "rarity": "N",   "isDefault": false },
+    { "id": "skin_006", "name": "イーグル",       "emoji": "🦅",        "rarity": "R",   "isDefault": false },
+    { "id": "skin_007", "name": "バレエダンサー", "emoji": "🧑‍🩰",       "rarity": "SSR", "isDefault": false }
+  ],
+  "attacks": [
+    {
+      "id": "attack_001",
+      "name": "殴り",
+      "effect": "🔅",
+      "power": 10,
+      "cost": 5,
+      "range": 1,
+      "angle": 90,
+      "pierce": false,
+      "knockback": "small",
+      "rarity": "N",
+      "isDefault": true
+    }
+  ],
+  "specials": [
+    {
+      "id": "skill_001",
+      "name": "マジ殴り",
+      "effect": "🔆",
+      "power": 20,
+      "cost": 5,
+      "range": 3,
+      "angle": 90,
+      "pierce": true,
+      "knockback": "medium",
