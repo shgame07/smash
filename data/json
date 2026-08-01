@@ -1,6 +1,12 @@
 {
   "skins": [
-    { "id": "skin_001", "name": "ノーマル", "emoji": "🤸", "rarity": "N", "isDefault": true }
+    { "id": "skin_001", "name": "ノーマル",       "emoji": "🤸",        "rarity": "N",   "isDefault": true },
+    { "id": "skin_002", "name": "ゆきだるま",     "emoji": "⛄",        "rarity": "N",   "isDefault": false },
+    { "id": "skin_003", "name": "フェニックス",   "emoji": "🐦‍🔥",       "rarity": "SR",  "isDefault": false },
+    { "id": "skin_004", "name": "妖精",           "emoji": "🧚",        "rarity": "R",   "isDefault": false },
+    { "id": "skin_005", "name": "バクテリア",     "emoji": "🦠",        "rarity": "N",   "isDefault": false },
+    { "id": "skin_006", "name": "イーグル",       "emoji": "🦅",        "rarity": "R",   "isDefault": false },
+    { "id": "skin_007", "name": "バレエダンサー", "emoji": "🧑‍🩰",       "rarity": "SSR", "isDefault": false }
   ],
   "attacks": [
     {
