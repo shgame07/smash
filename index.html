@@ -528,11 +528,19 @@ document.body.addEventListener("click", (e)=>{
    起動シーケンス
    ========================================================== */
 async function boot(){
+  let dataLoaded = false;
   try{
-    const res = await fetch(CONFIG.DATA_URL);
+    const res = await fetch(CONFIG.DATA_URL, {cache:"no-store"});
+    if(!res.ok) throw new Error("HTTP "+res.status);
     DATA = await res.json();
+    dataLoaded = true;
   }catch(err){
     console.error("data.json read error", err);
+  }
+
+  if(!dataLoaded || !DATA){
+    showDataLoadError();
+    return;
   }
 
   const savedId = localStorage.getItem(LS_KEYS.PLAYER_ID);
@@ -557,6 +565,17 @@ async function boot(){
     }
   }
   showScreen("register");
+}
+
+function showDataLoadError(){
+  const app = document.getElementById("app");
+  app.innerHTML =
+    '<div class="screen" style="justify-content:center;align-items:center;text-align:center;gap:16px;">' +
+    '<div style="font-size:40px;">⚠️</div>' +
+    '<div style="font-weight:700;">データの読み込みに失敗しました</div>' +
+    '<div style="font-size:13px;color:#666;max-width:300px;">data.json が index.html と同じ場所に置かれているかご確認ください。</div>' +
+    '<button class="btn primary" style="max-width:200px;" onclick="location.reload()">再読み込み</button>' +
+    '</div>';
 }
 
 document.getElementById("link-to-login").addEventListener("click", ()=>showScreen("login"));
@@ -626,6 +645,10 @@ document.getElementById("btn-change-password").addEventListener("click", async (
 function renderCharSelect(){
   const wrap = document.getElementById("charselect-list");
   wrap.innerHTML = "";
+  if(!DATA || !player){
+    wrap.innerHTML = '<div class="info-msg">データを読み込めませんでした。ホームに戻って再度お試しください。</div>';
+    return;
+  }
   const decks = Array.isArray(player.favorites) && player.favorites.length===3 ? player.favorites : [null,null,null];
   const available = decks.map((d,i)=>({d,i})).filter(o=>o.d);
 
@@ -700,6 +723,10 @@ function renderCustomize(){
 function drawCustomizeList(){
   const wrap = document.getElementById("customize-list-view");
   wrap.innerHTML = "";
+  if(!DATA || !player){
+    wrap.innerHTML = '<div class="info-msg">データを読み込めませんでした。ホームに戻って再度お試しください。</div>';
+    return;
+  }
 
   const favorites = Array.isArray(player.favorites) && player.favorites.length===3 ? player.favorites : [null,null,null];
 
