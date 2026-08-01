@@ -180,12 +180,12 @@
       <button class="btn home-btn" data-nav="customize">🎭 キャラ設定</button>
       <button class="btn home-btn" data-nav="account">👤 アカウント</button>
     </div>
-    <div style="text-align:center;font-size:11px;color:#bbb;padding-bottom:6px;">バージョン 1.0.0</div>
+    <div style="text-align:center;font-size:11px;color:#bbb;padding-bottom:6px;">v 1.0.2</div>
   </div>
 
   <!-- ===== キャラクター選択 ===== -->
   <div id="screen-charselect" class="screen hidden">
-    <div class="top-bar"><span class="back-btn" data-nav="home">←</span><span class="screen-title">キャラクター選択</span></div>
+    <div class="top-bar"><span class="back-btn" data-nav="home">←</span><span class="screen-title">デッキを選択</span></div>
     <div class="center-col" id="charselect-list"></div>
   </div>
 
@@ -283,12 +283,9 @@
 
   <!-- ===== キャラカスタマイズ ===== -->
   <div id="screen-customize" class="screen hidden">
-    <div class="top-bar"><span class="back-btn" data-nav="home">←</span><span class="screen-title">キャラカスタマイズ</span></div>
-    <div style="text-align:center;font-size:44px;" id="customize-preview">🤸</div>
-    <div id="customize-body"></div>
-    <div class="cost-summary" id="customize-cost"></div>
-    <div class="error-msg" id="customize-error"></div>
-    <button class="btn primary" id="btn-save-customize" style="margin-top:10px;">保存</button>
+    <div class="top-bar"><span class="back-btn" id="customize-back">←</span><span class="screen-title" id="customize-title">キャラ設定</span></div>
+    <div id="customize-list-view"></div>
+    <div id="customize-edit-view" class="hidden"></div>
   </div>
 
   <!-- ===== ガチャ画面 ===== -->
@@ -302,7 +299,7 @@
     </div>
     <div class="center-col">
       <button class="btn primary" id="btn-gacha-pull">ガチャを引く</button>
-      <div class="info-msg" id="gacha-msg">現在ガチャ対象がありません</div>
+      <div class="info-msg" id="gacha-msg"></div>
     </div>
     <button class="btn ghost" data-nav="ownedlist">所持一覧を見る</button>
   </div>
@@ -367,8 +364,37 @@ function defaultPlayerObject(playerId, password, name){
     highScore:0, totalPlays:0, totalKills:0, totalPlayTimeSec:0,
     equippedSkin:"skin_001", equippedAttack:"attack_001", equippedSpecial:"skill_001",
     ownedSkins:["skin_001"], ownedAttacks:["attack_001"], ownedSpecials:["skill_001"],
-    points:0, createdAt:now, updatedAt:now
+    points:0, createdAt:now, updatedAt:now,
+    favorites:[null,null,null]
   };
+}
+
+function normalizePlayer(p){
+  function arr(v, fallback){
+    if(Array.isArray(v)) return v;
+    if(typeof v === "string"){
+      try{ const parsed = JSON.parse(v); if(Array.isArray(parsed)) return parsed; }catch(e){}
+    }
+    return fallback;
+  }
+  p.ownedSkins = arr(p.ownedSkins, ["skin_001"]);
+  p.ownedAttacks = arr(p.ownedAttacks, ["attack_001"]);
+  p.ownedSpecials = arr(p.ownedSpecials, ["skill_001"]);
+  if(p.ownedSkins.length===0) p.ownedSkins = ["skin_001"];
+  if(p.ownedAttacks.length===0) p.ownedAttacks = ["attack_001"];
+  if(p.ownedSpecials.length===0) p.ownedSpecials = ["skill_001"];
+  if(!p.equippedSkin || !p.ownedSkins.includes(p.equippedSkin)) p.equippedSkin = p.ownedSkins[0];
+  if(!p.equippedAttack || !p.ownedAttacks.includes(p.equippedAttack)) p.equippedAttack = p.ownedAttacks[0];
+  if(!p.equippedSpecial || !p.ownedSpecials.includes(p.equippedSpecial)) p.equippedSpecial = p.ownedSpecials[0];
+  let favs = arr(p.favorites, null);
+  if(!Array.isArray(favs) || favs.length!==3){ favs = [null,null,null]; }
+  if(favs.every(f=>!f)){
+    favs = [{ skin:p.equippedSkin, attack:p.equippedAttack, special:p.equippedSpecial }, null, null];
+  }
+  p.favorites = favs;
+  p.points = Number(p.points)||0;
+  p.highScore = Number(p.highScore)||0;
+  return p;
 }
 
 function randomPlayerId(){
@@ -387,27 +413,35 @@ function randomPassword(){
 async function register(name){
   if(apiAvailable()){
     const r = await apiCall("register", {name});
-    if(r.ok) return r.player;
+    if(r.ok){
+      const p = normalizePlayer(r.player);
+      const db = localPlayersDB(); db[p.playerId]=p; saveLocalPlayersDB(db);
+      return p;
+    }
   }
   // ローカルフォールバック
   const id = randomPlayerId();
   const pw = randomPassword();
   const p = defaultPlayerObject(id, pw, name);
   const db = localPlayersDB(); db[id]=p; saveLocalPlayersDB(db);
-  return p;
+  return normalizePlayer(p);
 }
 
 async function login(playerId, password){
   if(apiAvailable()){
     const r = await apiCall("login", {playerId, password});
-    if(r.ok) return {ok:true, player:r.player};
+    if(r.ok){
+      const p = normalizePlayer(r.player);
+      const db = localPlayersDB(); db[p.playerId]=p; saveLocalPlayersDB(db);
+      return {ok:true, player:p};
+    }
     if(!r.offline) return {ok:false, error:r.error||"ログインに失敗しました"};
   }
   const db = localPlayersDB();
   const p = db[playerId];
   if(!p) return {ok:false, error:"プレイヤーIDが見つかりません"};
   if(String(p.password)!==String(password)) return {ok:false, error:"パスワードが違います"};
-  return {ok:true, player:p};
+  return {ok:true, player:normalizePlayer(p)};
 }
 
 async function saveData(partial){
@@ -494,14 +528,33 @@ document.body.addEventListener("click", (e)=>{
    起動シーケンス
    ========================================================== */
 async function boot(){
-  const res = await fetch(CONFIG.DATA_URL);
-  DATA = await res.json();
+  try{
+    const res = await fetch(CONFIG.DATA_URL);
+    DATA = await res.json();
+  }catch(err){
+    console.error("data.json read error", err);
+  }
 
   const savedId = localStorage.getItem(LS_KEYS.PLAYER_ID);
   const savedPw = localStorage.getItem(LS_KEYS.PASSWORD);
+
   if(savedId && savedPw){
+    // ローカルにキャッシュがあれば先に反映し、通信が不安定でも即プレイ継続できるようにする
+    const db = localPlayersDB();
+    if(db[savedId]){
+      player = normalizePlayer(db[savedId]);
+    }
     const r = await login(savedId, savedPw);
-    if(r.ok){ player = r.player; showScreen("home"); return; }
+    if(r.ok){
+      player = r.player;
+      showScreen("home");
+      return;
+    }
+    if(player){
+      // サーバー同期には失敗したが、同端末の登録情報があるためログイン画面には戻さない
+      showScreen("home");
+      return;
+    }
   }
   showScreen("register");
 }
@@ -573,16 +626,40 @@ document.getElementById("btn-change-password").addEventListener("click", async (
 function renderCharSelect(){
   const wrap = document.getElementById("charselect-list");
   wrap.innerHTML = "";
-  DATA.skins.forEach(sk=>{
-    const owned = player.ownedSkins.includes(sk.id);
-    if(!owned) return;
-    const btn = document.createElement("button");
-    btn.className = "btn"+(player.equippedSkin===sk.id?" primary":"");
-    btn.style.fontSize="34px";
-    btn.textContent = sk.emoji;
-    btn.addEventListener("click", ()=> startCountdown());
-    wrap.appendChild(btn);
+  const decks = Array.isArray(player.favorites) && player.favorites.length===3 ? player.favorites : [null,null,null];
+  const available = decks.map((d,i)=>({d,i})).filter(o=>o.d);
+
+  if(available.length===0){
+    const info = document.createElement("div");
+    info.className = "info-msg";
+    info.textContent = "デッキが未設定です。キャラ設定からデッキを作成してください。";
+    wrap.appendChild(info);
+  }
+
+  available.forEach(({d,i})=>{
+    const skin = DATA.skins.find(s=>s.id===d.skin);
+    const atk = DATA.attacks.find(a=>a.id===d.attack);
+    const spc = DATA.specials.find(s=>s.id===d.special);
+    const card = document.createElement("button");
+    card.className = "btn";
+    card.style.cssText = "text-align:left;display:flex;flex-direction:column;gap:4px;padding:14px;";
+    card.innerHTML =
+      '<div style="font-weight:800;font-size:13px;color:var(--red);">デッキ'+(i+1)+'</div>' +
+      '<div style="font-size:28px;">'+(skin?skin.emoji:"?")+' '+(atk?atk.effect:"?")+' '+(spc?spc.effect:"?")+'</div>' +
+      '<div style="font-size:12px;color:#666;">'+(atk?atk.name:"-")+' / '+(spc?spc.name:"-")+'</div>';
+    card.addEventListener("click", async ()=>{
+      await saveData({ equippedSkin:d.skin, equippedAttack:d.attack, equippedSpecial:d.special });
+      startCountdown();
+    });
+    wrap.appendChild(card);
   });
+
+  const startBtn = document.createElement("button");
+  startBtn.className = "btn primary";
+  startBtn.style.marginTop = "20px";
+  startBtn.textContent = "現在の装備でスタート";
+  startBtn.addEventListener("click", ()=> startCountdown());
+  wrap.appendChild(startBtn);
 }
 function startCountdown(){
   showScreen("countdown");
@@ -601,73 +678,170 @@ function startCountdown(){
 /* ==========================================================
    キャラカスタマイズ
    ========================================================== */
-let customizeSelection = null;
-function renderCustomize(){
-  customizeSelection = {
-    skin: player.equippedSkin,
-    attack: player.equippedAttack,
-    special: player.equippedSpecial
-  };
-  document.getElementById("customize-error").textContent = "";
-  drawCustomizeBody();
-}
-function drawCustomizeBody(){
-  const body = document.getElementById("customize-body");
-  body.innerHTML = "";
+let customizeMode = "list"; // "list" | "edit"
+let editingSlot = 0;
+let editStep = 0; // 0:スキン 1:通常攻撃 2:必殺技
+let editSelection = {};
 
-  function section(title, items, ownedKey, selKey){
+const EDIT_STEPS = [
+  { key:"skin",    title:"① キャラを選択",     data:"skins",    owned:"ownedSkins" },
+  { key:"attack",  title:"② 通常攻撃を選択",   data:"attacks",  owned:"ownedAttacks" },
+  { key:"special", title:"③ 必殺技を選択",     data:"specials", owned:"ownedSpecials" }
+];
+
+function renderCustomize(){
+  customizeMode = "list";
+  document.getElementById("customize-title").textContent = "キャラ設定";
+  document.getElementById("customize-list-view").classList.remove("hidden");
+  document.getElementById("customize-edit-view").classList.add("hidden");
+  drawCustomizeList();
+}
+
+function drawCustomizeList(){
+  const wrap = document.getElementById("customize-list-view");
+  wrap.innerHTML = "";
+
+  const favorites = Array.isArray(player.favorites) && player.favorites.length===3 ? player.favorites : [null,null,null];
+
+  favorites.forEach((fav, idx)=>{
     const card = document.createElement("div");
     card.className = "equip-card";
+
     const label = document.createElement("div");
     label.className = "cat-label";
-    label.textContent = title;
+    label.textContent = "デッキ " + (idx+1);
     card.appendChild(label);
-    items.forEach(item=>{
-      if(!player[ownedKey].includes(item.id)) return;
-      const row = document.createElement("div");
-      row.className = "item-choice" + (customizeSelection[selKey]===item.id ? " selected":"");
-      row.innerHTML = `<span class="item-emoji">${item.emoji||item.effect}</span>
-        <div><div>${item.name}</div><div class="item-meta">${metaText(item)}</div></div>`;
-      row.addEventListener("click", ()=>{
-        customizeSelection[selKey] = item.id;
-        drawCustomizeBody();
-      });
-      card.appendChild(row);
-    });
-    body.appendChild(card);
-  }
-  function metaText(item){
-    if(item.power===undefined) return "";
-    return `攻撃力${item.power} / コスト${item.cost}`;
-  }
 
-  section("スキン", DATA.skins, "ownedSkins", "skin");
-  section("通常攻撃", DATA.attacks, "ownedAttacks", "attack");
-  section("必殺技", DATA.specials, "ownedSpecials", "special");
+    if(fav){
+      const skin = DATA.skins.find(s=>s.id===fav.skin);
+      const atk = DATA.attacks.find(a=>a.id===fav.attack);
+      const spc = DATA.specials.find(s=>s.id===fav.special);
 
-  const atk = DATA.attacks.find(a=>a.id===customizeSelection.attack);
-  const spc = DATA.specials.find(s=>s.id===customizeSelection.special);
-  const total = (atk?atk.cost:0) + (spc?spc.cost:0);
-  const costEl = document.getElementById("customize-cost");
-  costEl.textContent = `コスト合計: ${total} / ${DATA.config.maxCostTotal}`;
-  costEl.className = "cost-summary" + (total>DATA.config.maxCostTotal ? " over":"");
+      const previewRow = document.createElement("div");
+      previewRow.style.cssText = "font-size:28px;margin:8px 0;";
+      previewRow.innerHTML = (skin?skin.emoji:"?")+" "+(atk?atk.effect:"?")+" "+(spc?spc.effect:"?");
+      card.appendChild(previewRow);
 
-  const preview = DATA.skins.find(s=>s.id===customizeSelection.skin);
-  document.getElementById("customize-preview").textContent = preview? preview.emoji : "🤸";
-}
-document.getElementById("btn-save-customize").addEventListener("click", async ()=>{
-  const atk = DATA.attacks.find(a=>a.id===customizeSelection.attack);
-  const spc = DATA.specials.find(s=>s.id===customizeSelection.special);
-  const total = (atk?atk.cost:0) + (spc?spc.cost:0);
-  const err = document.getElementById("customize-error");
-  if(total > DATA.config.maxCostTotal){ err.textContent = "コスト上限を超えています"; return; }
-  err.textContent = "";
-  await saveData({
-    equippedSkin: customizeSelection.skin,
-    equippedAttack: customizeSelection.attack,
-    equippedSpecial: customizeSelection.special
+      const nameRow = document.createElement("div");
+      nameRow.style.cssText = "font-size:12px;color:#666;margin-bottom:8px;";
+      nameRow.textContent = (atk?atk.name:"-") + " / " + (spc?spc.name:"-");
+      card.appendChild(nameRow);
+    } else {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:#999;font-size:13px;margin:8px 0;";
+      empty.textContent = "未設定";
+      card.appendChild(empty);
+    }
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "btn small";
+    editBtn.style.margin = "0";
+    editBtn.textContent = "編集";
+    editBtn.addEventListener("click", ()=>startEditFavorite(idx));
+    card.appendChild(editBtn);
+
+    wrap.appendChild(card);
   });
-  showScreen("home");
+}
+
+function startEditFavorite(idx){
+  editingSlot = idx;
+  editStep = 0;
+  const fav = player.favorites[idx];
+  editSelection = {
+    skin: fav ? fav.skin : (player.ownedSkins[0] || "skin_001"),
+    attack: fav ? fav.attack : (player.ownedAttacks[0] || "attack_001"),
+    special: fav ? fav.special : (player.ownedSpecials[0] || "skill_001")
+  };
+  customizeMode = "edit";
+  document.getElementById("customize-list-view").classList.add("hidden");
+  document.getElementById("customize-edit-view").classList.remove("hidden");
+  drawEditStep();
+}
+
+function drawEditStep(){
+  const stepDef = EDIT_STEPS[editStep];
+  document.getElementById("customize-title").textContent = "デッキ" + (editingSlot+1) + " 編集";
+  const wrap = document.getElementById("customize-edit-view");
+  wrap.innerHTML = "";
+
+  const stepTitle = document.createElement("div");
+  stepTitle.style.cssText = "text-align:center;font-weight:700;margin:6px 0 14px;";
+  stepTitle.textContent = stepDef.title + "（" + (editStep+1) + "/3）";
+  wrap.appendChild(stepTitle);
+
+  const items = DATA[stepDef.data];
+  items.forEach(item=>{
+    if(!player[stepDef.owned].includes(item.id)) return;
+    const row = document.createElement("div");
+    row.className = "item-choice" + (editSelection[stepDef.key]===item.id ? " selected":"");
+    const metaText = item.power!==undefined ? ("攻撃力"+item.power+" / コスト"+item.cost) : "";
+    row.innerHTML =
+      '<span class="item-emoji">'+(item.emoji||item.effect)+'</span>' +
+      '<div><div>'+item.name+'</div><div class="item-meta">'+metaText+'</div></div>';
+    row.addEventListener("click", ()=>{
+      editSelection[stepDef.key] = item.id;
+      drawEditStep();
+    });
+    wrap.appendChild(row);
+  });
+
+  if(editStep===2){
+    const atk = DATA.attacks.find(a=>a.id===editSelection.attack);
+    const spc = DATA.specials.find(s=>s.id===editSelection.special);
+    const total = (atk?atk.cost:0) + (spc?spc.cost:0);
+    const costEl = document.createElement("div");
+    costEl.className = "cost-summary" + (total>DATA.config.maxCostTotal ? " over":"");
+    costEl.textContent = "コスト合計: " + total + " / " + DATA.config.maxCostTotal;
+    wrap.appendChild(costEl);
+
+    const errEl = document.createElement("div");
+    errEl.className = "error-msg";
+    errEl.id = "edit-cost-error";
+    wrap.appendChild(errEl);
+  }
+
+  const nextBtn = document.createElement("button");
+  nextBtn.className = "btn primary";
+  nextBtn.style.marginTop = "10px";
+  nextBtn.textContent = editStep<2 ? "次へ" : "保存する";
+  nextBtn.addEventListener("click", ()=>{
+    if(editStep<2){ editStep++; drawEditStep(); }
+    else { saveFavorite(); }
+  });
+  wrap.appendChild(nextBtn);
+}
+
+async function saveFavorite(){
+  const atk = DATA.attacks.find(a=>a.id===editSelection.attack);
+  const spc = DATA.specials.find(s=>s.id===editSelection.special);
+  const total = (atk?atk.cost:0) + (spc?spc.cost:0);
+  if(total > DATA.config.maxCostTotal){
+    document.getElementById("edit-cost-error").textContent = "コスト上限を超えています";
+    return;
+  }
+  const favorites = (Array.isArray(player.favorites) ? player.favorites : [null,null,null]).slice();
+  favorites[editingSlot] = { skin:editSelection.skin, attack:editSelection.attack, special:editSelection.special };
+  await saveData({ favorites });
+  customizeMode = "list";
+  document.getElementById("customize-edit-view").classList.add("hidden");
+  document.getElementById("customize-list-view").classList.remove("hidden");
+  document.getElementById("customize-title").textContent = "キャラ設定";
+  drawCustomizeList();
+}
+
+document.getElementById("customize-back").addEventListener("click", ()=>{
+  if(customizeMode==="edit"){
+    if(editStep>0){ editStep--; drawEditStep(); }
+    else {
+      customizeMode = "list";
+      document.getElementById("customize-edit-view").classList.add("hidden");
+      document.getElementById("customize-list-view").classList.remove("hidden");
+      document.getElementById("customize-title").textContent = "キャラ設定";
+    }
+  } else {
+    showScreen("home");
+  }
 });
 
 /* ==========================================================
@@ -679,13 +853,48 @@ document.querySelectorAll(".gacha-cat-btn").forEach(btn=>{
     document.querySelectorAll(".gacha-cat-btn").forEach(b=>b.classList.remove("selected"));
     btn.classList.add("selected");
     gachaType = btn.getAttribute("data-gtype");
+    updateGachaMessage();
   });
 });
+
+function getGachaPool(type){
+  if(type==="skin") return DATA.skins.filter(s=>!player.ownedSkins.includes(s.id));
+  if(type==="attack") return DATA.attacks.filter(a=>!player.ownedAttacks.includes(a.id));
+  if(type==="special") return DATA.specials.filter(s=>!player.ownedSpecials.includes(s.id));
+  return [];
+}
+
+function updateGachaMessage(){
+  const pool = getGachaPool(gachaType);
+  const msgEl = document.getElementById("gacha-msg");
+  const btn = document.getElementById("btn-gacha-pull");
+  if(pool.length===0){
+    msgEl.textContent = "このカテゴリのラインナップはすべて入手済みです";
+    btn.disabled = true;
+  } else if(player.points < DATA.config.gachaCostPoints){
+    msgEl.textContent = "ポイントが足りません（"+DATA.config.gachaCostPoints+"ptで1回）";
+    btn.disabled = true;
+  } else {
+    msgEl.textContent = "";
+    btn.disabled = false;
+  }
+}
+
 function renderGacha(){
   document.getElementById("gacha-points").textContent = player.points;
+  updateGachaMessage();
 }
-document.getElementById("btn-gacha-pull").addEventListener("click", ()=>{
-  alert("現在ガチャで入手できるアイテムはありません。今後のアップデートをお待ちください。");
+document.getElementById("btn-gacha-pull").addEventListener("click", async ()=>{
+  const pool = getGachaPool(gachaType);
+  if(pool.length===0 || player.points < DATA.config.gachaCostPoints) return;
+  const picked = pool[Math.floor(Math.random()*pool.length)];
+  const ownedKey = gachaType==="skin" ? "ownedSkins" : gachaType==="attack" ? "ownedAttacks" : "ownedSpecials";
+  const newOwned = player[ownedKey].concat([picked.id]);
+  const newPoints = player.points - DATA.config.gachaCostPoints;
+  await saveData({ points:newPoints, [ownedKey]:newOwned });
+  updateGachaMessage();
+  document.getElementById("gacha-points").textContent = player.points;
+  alert("獲得！\n" + (picked.emoji||picked.effect) + " " + picked.name);
 });
 
 function renderOwnedList(){
