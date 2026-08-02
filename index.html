@@ -146,8 +146,17 @@
 <body>
 <div id="app">
 
+  <!-- ===== 読み込み中 ===== -->
+  <div id="screen-loading" class="screen">
+    <div class="center-col">
+      <div class="title">SMASH!! <span class="accent">-lite-</span></div>
+      <div class="info-msg">読み込み中です…</div>
+      <div class="info-msg" id="loading-note" style="display:none;">通信状況によっては、ホーム画面の表示までお時間がかかる場合があります。</div>
+    </div>
+  </div>
+
   <!-- ===== 登録画面 ===== -->
-  <div id="screen-register" class="screen">
+  <div id="screen-register" class="screen hidden">
     <div class="title">SMASH!! <span class="accent">-lite-</span></div>
     <div class="center-col">
       <div style="text-align:center;font-size:14px;color:#666;">プレイヤーネームを入力してください</div>
@@ -506,7 +515,7 @@ async function getRanking(){
 /* ==========================================================
    画面遷移
    ========================================================== */
-const screens = ["register","login","home","charselect","countdown","game","result","ranking","account","password","customize","gacha","ownedlist"];
+const screens = ["loading","register","login","home","charselect","countdown","game","result","ranking","account","password","customize","gacha","ownedlist"];
 function showScreen(name){
   screens.forEach(s=>{
     document.getElementById("screen-"+s).classList.toggle("hidden", s!==name);
@@ -555,19 +564,20 @@ async function boot(){
   const savedPw = localStorage.getItem(LS_KEYS.PASSWORD);
 
   if(savedId && savedPw){
-    // ローカルにキャッシュがあれば先に反映し、通信が不安定でも即プレイ継続できるようにする
     const db = localPlayersDB();
     if(db[savedId]){
+      // ローカルにキャッシュがあれば通信を待たずに即ホームへ（自動ログインの高速化）
       player = normalizePlayer(db[savedId]);
+      showScreen("home");
+      login(savedId, savedPw).then(r=>{ if(r.ok){ player = r.player; } }); // 裏で同期
+      return;
     }
+    // キャッシュが無い場合のみサーバー応答を待つ（別端末など）。時間がかかる旨を表示。
+    const noteEl = document.getElementById("loading-note");
+    if(noteEl) noteEl.style.display = "block";
     const r = await login(savedId, savedPw);
     if(r.ok){
       player = r.player;
-      showScreen("home");
-      return;
-    }
-    if(player){
-      // サーバー同期には失敗したが、同端末の登録情報があるためログイン画面には戻さない
       showScreen("home");
       return;
     }
@@ -980,21 +990,78 @@ async function renderRanking(){
 /* ==========================================================
    ゲーム本体
    ========================================================== */
-const LOGICAL_W = 400, LOGICAL_H = 700;
-const PLAYER_RADIUS = 16, ENEMY_RADIUS = 16;
+const LOGICAL_W = 480, LOGICAL_H = 700; // ステージを1.2倍横長に
+const PLAYER_RADIUS = 19, ENEMY_RADIUS = 19; // 1.2倍サイズ
 const GRAVITY = 1500;
 const JUMP_VELOCITY = -580;
-const MOVE_SPEED = 170;
-const ENEMY_SPEED = 95;
+const MOVE_SPEED = 204; // 1.2倍速度
+const ENEMY_SPEED = 114; // 1.2倍速度
 const CIRCLE_UNIT = 62; // 「○1個分」の距離換算
 const FRICTION_KNOCKBACK = 900;
 
+// ジャンプで届く高さ・横距離の目安（足場配置の妥当性チェック用）
+const MAX_JUMP_HEIGHT = (JUMP_VELOCITY*JUMP_VELOCITY)/(2*GRAVITY); // 約112px
+const JUMP_AIR_TIME = 2*(-JUMP_VELOCITY/GRAVITY);                  // 約0.77sec
+
 const PLATFORMS = [
-  { x1:0,   x2:400, y:660, passableFromBelow:false }, // 最下段の床
-  { x1:15,  x2:150, y:470, passableFromBelow:true },  // 左足場
-  { x1:250, x2:385, y:470, passableFromBelow:true },  // 右足場
-  { x1:140, x2:260, y:300, passableFromBelow:true },  // 中央上足場
+  { x1:0,   x2:480, y:600, passableFromBelow:false }, // 最下段の床（1.2倍長・やや上に配置）
+  { x1:20,  x2:190, y:500, passableFromBelow:true },  // 左足場（床から100px上＝ジャンプで届く）
+  { x1:290, x2:460, y:500, passableFromBelow:true },  // 右足場
+  { x1:170, x2:310, y:400, passableFromBelow:true },  // 中央上足場
 ];
+
+// 敵AI用：足場同士の到達可能グラフ（ジャンプ高さ・横移動距離から算出）
+function buildPlatformGraph(){
+  const maxHorizontal = ENEMY_SPEED * JUMP_AIR_TIME; // ジャンプ滞空中に移動できる横距離の目安
+  const graph = PLATFORMS.map(()=>[]);
+  for(let i=0;i<PLATFORMS.length;i++){
+    for(let j=0;j<PLATFORMS.length;j++){
+      if(i===j) continue;
+      const a = PLATFORMS[i], b = PLATFORMS[j];
+      const risingUp = b.y < a.y; // yが小さいほど上
+      const verticalOk = risingUp ? (a.y - b.y) <= (MAX_JUMP_HEIGHT + 8) : true; // 下りは自由落下でOK
+      const overlap = Math.max(a.x1,b.x1) <= Math.min(a.x2,b.x2);
+      const gap = overlap ? 0 : Math.max(a.x1-b.x2, b.x1-a.x2);
+      const horizontalOk = gap <= maxHorizontal;
+      if(verticalOk && horizontalOk) graph[i].push(j);
+    }
+  }
+  return graph;
+}
+const PLATFORM_GRAPH = buildPlatformGraph();
+
+function findPlatformPath(fromIdx, toIdx){
+  if(fromIdx===toIdx) return [fromIdx];
+  const visited = new Set([fromIdx]);
+  const queue = [[fromIdx]];
+  while(queue.length){
+    const path = queue.shift();
+    const last = path[path.length-1];
+    for(const next of PLATFORM_GRAPH[last]){
+      if(next===toIdx) return path.concat(next);
+      if(!visited.has(next)){
+        visited.add(next);
+        queue.push(path.concat(next));
+      }
+    }
+  }
+  return null; // 経路が無い場合（通常は発生しない）
+}
+
+function getStandingPlatformIndex(ent){
+  let best=-1, bestDist=Infinity;
+  for(let i=0;i<PLATFORMS.length;i++){
+    const p = PLATFORMS[i];
+    if(ent.x+ent.radius < p.x1 || ent.x-ent.radius > p.x2) continue;
+    const d = Math.abs((ent.y+ent.radius) - p.y);
+    if(d < bestDist){ bestDist = d; best = i; }
+  }
+  if(best!==-1) return best;
+  for(let i=0;i<PLATFORMS.length;i++){
+    if(PLATFORMS[i].y >= ent.y && (best===-1 || PLATFORMS[i].y < PLATFORMS[best].y)) best = i;
+  }
+  return best!==-1 ? best : 0;
+}
 
 let canvas, ctx;
 let gameState = null;
@@ -1050,7 +1117,7 @@ function startGame(){
     effects: [],
     over: false,
     atk, spc, skin, enemyDef,
-    player: makeEntity(200, 620, PLAYER_RADIUS),
+    player: makeEntity(240, 560, PLAYER_RADIUS),
     input: { dir:0 }
   };
   gameState.player.grounded = true;
@@ -1265,13 +1332,34 @@ function updateEnemy(en, dt){
   if(en.aiTimer <= 0){
     en.aiTimer = 500;
     const p = gameState.player;
-    const dx = p.x - en.x;
+    const fromIdx = getStandingPlatformIndex(en);
+    const toIdx = getStandingPlatformIndex(p);
+    const path = findPlatformPath(fromIdx, toIdx);
+
+    let targetX = p.x;
+    let wantJump = false;
+
+    if(path && path.length > 1){
+      const curPlat = PLATFORMS[fromIdx];
+      const nextPlat = PLATFORMS[path[1]];
+      const overlapMin = Math.max(curPlat.x1, nextPlat.x1);
+      const overlapMax = Math.min(curPlat.x2, nextPlat.x2);
+      if(overlapMin <= overlapMax){
+        targetX = Math.max(overlapMin, Math.min(overlapMax, p.x)); // 重なり範囲内でプレイヤーに近い位置を狙う
+      } else {
+        targetX = (nextPlat.x1 > curPlat.x2) ? curPlat.x2 : curPlat.x1; // 隙間がある場合は近い端へ回り込む
+      }
+      if(nextPlat.y < curPlat.y - 10) wantJump = true; // 次の足場が上にある＝ジャンプが必要
+    }
+
+    const dx = targetX - en.x;
     en.aiDir = Math.abs(dx) > 4 ? Math.sign(dx) : 0;
     en.facing = en.aiDir !== 0 ? en.aiDir : en.facing;
-    if(p.y < en.y - 60 && en.grounded && Math.random() < 0.6){
-      en.vy = JUMP_VELOCITY*0.85;
-      en.grounded = false;
-    }
+    en.wantJump = wantJump;
+  }
+  if(en.wantJump && en.grounded){
+    en.vy = JUMP_VELOCITY;
+    en.grounded = false;
   }
   if(Math.abs(en.vx) < 20){ // ノックバック収まったら移動
     en.x += (en.aiDir||0) * ENEMY_SPEED * dt;
@@ -1379,7 +1467,7 @@ function render(){
     ctx.save();
     let scale = 1;
     if(en.dead){ scale = Math.max(0, en.deathAnim/0.2); ctx.globalAlpha = scale; }
-    ctx.font = (32*scale)+"px sans-serif";
+    ctx.font = (38*scale)+"px sans-serif";
     ctx.textAlign="center"; ctx.textBaseline="middle";
     if(en.flash>0){ ctx.filter = "brightness(1.8)"; }
     ctx.fillText("👾", en.x, en.y);
@@ -1390,7 +1478,7 @@ function render(){
   const p = gameState.player;
   ctx.save();
   if(gameState.playerFlash>0){ ctx.globalAlpha = 0.5; }
-  ctx.font = "34px sans-serif";
+  ctx.font = "41px sans-serif";
   ctx.textAlign="center"; ctx.textBaseline="middle";
   ctx.save();
   ctx.translate(p.x, p.y);
@@ -1404,7 +1492,7 @@ function render(){
     ctx.save();
     const t = 1 - fx.life/fx.maxLife;
     ctx.globalAlpha = fx.life/fx.maxLife;
-    ctx.font = (26+10*t)+"px sans-serif";
+    ctx.font = (31+12*t)+"px sans-serif";
     ctx.textAlign="center"; ctx.textBaseline="middle";
     ctx.fillText(fx.text, fx.x + fx.facing*30, fx.y - 6);
     ctx.restore();
