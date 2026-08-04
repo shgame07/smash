@@ -189,7 +189,7 @@
       <button class="btn home-btn" data-nav="customize">🎭 キャラ設定</button>
       <button class="btn home-btn" data-nav="account">👤 アカウント</button>
     </div>
-    <div style="text-align:center;font-size:11px;color:#bbb;padding-bottom:6px;">v 1.1.0</div>
+    <div style="text-align:center;font-size:11px;color:#bbb;padding-bottom:6px;">v 1.1.5</div>
   </div>
 
   <!-- ===== キャラクター選択 ===== -->
@@ -995,8 +995,10 @@ async function renderRanking(){
 const TILE = { WALL:1, FLOOR:0 };
 
 let TILE_SIZE = 38, MAP_SIZE = 64, VIEW_TILES = 17, VIEWPORT_PX = 17*38;
-let PLAYER_SPEED = 3*38, ENEMY_SPEED = 4*38, BOSS_SPEED = 3*38;
+let PLAYER_SPEED = 3.5*38, ENEMY_SPEED = 3.5*38, BOSS_SPEED = 3.5*38;
+let PLAYER_SPEED_BUFFED = 5*38;
 let VISION_RADIUS = 2;
+let CHEST_OPEN_RADIUS_PX = 2*38, BOMB_RADIUS_PX = 6*38;
 
 const DIR_VECTORS = {
   up:    { x:0,  y:-1 },
@@ -1015,6 +1017,9 @@ function applyMapConfig(){
   ENEMY_SPEED = m.enemySpeedTilesPerSec * TILE_SIZE;
   BOSS_SPEED = m.boss.speedTilesPerSec * TILE_SIZE;
   VISION_RADIUS = m.visionRadiusTiles;
+  PLAYER_SPEED_BUFFED = m.chest.rewardValues.speedBoostTilesPerSec * TILE_SIZE;
+  CHEST_OPEN_RADIUS_PX = m.chest.openRadiusTiles * TILE_SIZE;
+  BOMB_RADIUS_PX = m.chest.rewardValues.bombRadiusTiles * TILE_SIZE;
 }
 
 function shuffle(arr){
@@ -1246,14 +1251,37 @@ function updateChaser(ent, speed, dt, grid){
 }
 
 /* ---- プレイヤー移動 ---- */
+function snapToward(current, target, maxDelta){
+  if(Math.abs(target-current) <= maxDelta) return target;
+  return current + Math.sign(target-current)*maxDelta;
+}
+
 function updatePlayerMove(dt, grid){
   const p = gameState.player;
   const dir = gameState.input.dir;
+  const speed = gameState.speedBuffTimer>0 ? PLAYER_SPEED_BUFFED : PLAYER_SPEED;
+
   if(dir.x!==0 || dir.y!==0){
     let mx=0, my=0;
-    if(Math.abs(dir.x) >= Math.abs(dir.y)){ mx = Math.sign(dir.x); p.facing = mx>0?"right":"left"; }
-    else { my = Math.sign(dir.y); p.facing = my>0?"down":"up"; }
-    moveWithCollision(p, mx*PLAYER_SPEED*dt, my*PLAYER_SPEED*dt, grid);
+    if(Math.abs(dir.x) >= Math.abs(dir.y)){
+      mx = Math.sign(dir.x); p.facing = mx>0?"right":"left";
+      // 縦方向はマス中央へ寄せておく（角で引っかからないように）
+      const centerY = Math.floor(p.y/TILE_SIZE)*TILE_SIZE + TILE_SIZE/2;
+      const targetY = snapToward(p.y, centerY, speed*dt);
+      moveWithCollision(p, mx*speed*dt, targetY-p.y, grid);
+    } else {
+      my = Math.sign(dir.y); p.facing = my>0?"down":"up";
+      const centerX = Math.floor(p.x/TILE_SIZE)*TILE_SIZE + TILE_SIZE/2;
+      const targetX = snapToward(p.x, centerX, speed*dt);
+      moveWithCollision(p, targetX-p.x, my*speed*dt, grid);
+    }
+  } else {
+    // 停止時はマスの中央へスナップする
+    const centerX = Math.floor(p.x/TILE_SIZE)*TILE_SIZE + TILE_SIZE/2;
+    const centerY = Math.floor(p.y/TILE_SIZE)*TILE_SIZE + TILE_SIZE/2;
+    const nx = snapToward(p.x, centerX, speed*dt);
+    const ny = snapToward(p.y, centerY, speed*dt);
+    moveWithCollision(p, nx-p.x, ny-p.y, grid);
   }
 }
 
@@ -1294,6 +1322,16 @@ function damageEnemy(en, power, facingDir){
   en.flash = 0.15;
   const dir = DIR_VECTORS[facingDir];
   moveWithCollision(en, dir.x*TILE_SIZE*0.8, dir.y*TILE_SIZE*0.8, gameState.grid);
+  if(en.hp <= 0 && !en.dead){
+    en.dead = true;
+    en.deathAnim = 0.2;
+    onEnemyKilled(en===gameState.boss);
+  }
+}
+
+function damageEntityFlat(en, power){
+  en.hp -= power;
+  en.flash = 0.15;
   if(en.hp <= 0 && !en.dead){
     en.dead = true;
     en.deathAnim = 0.2;
@@ -1446,6 +1484,89 @@ function handleGateCheck(){
   if(dist < p.radius+TILE_SIZE*0.4) endGame(true);
 }
 
+/* ---- 宝箱 ---- */
+function findChestSpawnTile(){
+  const cfg = DATA.map.chest;
+  const p = gameState.player;
+  const pt = tileOf(p.x,p.y);
+  for(let attempt=0; attempt<80; attempt++){
+    const r = Math.floor(Math.random()*MAP_SIZE);
+    const c = Math.floor(Math.random()*MAP_SIZE);
+    if(gameState.grid[r][c]!==TILE.FLOOR) continue;
+    if(Math.hypot(r-pt.r, c-pt.c) < cfg.minDistanceTiles) continue;
+    if(gameState.chests.some(ch=>ch.r===r && ch.c===c)) continue;
+    return {r,c};
+  }
+  return null;
+}
+function spawnChest(){
+  const cfg = DATA.map.chest;
+  if(gameState.chests.length >= cfg.maxOnMap) return;
+  const tile = findChestSpawnTile();
+  if(!tile) return;
+  const center = tileCenterPx(tile.r, tile.c);
+  gameState.chests.push({ r:tile.r, c:tile.c, x:center.x, y:center.y, openProgress:0 });
+}
+
+const CHEST_REWARD_TYPES = ["coin","heal","gauge","speed","freeze","bomb"];
+function applyChestReward(type){
+  const rv = DATA.map.chest.rewardValues;
+  const p = gameState.player;
+  switch(type){
+    case "coin":
+      gameState.coinScore += rv.coinScore;
+      showCenterPopup("🪙 スコア+"+rv.coinScore, 1200);
+      break;
+    case "heal":
+      gameState.hp = Math.min(gameState.maxHp, gameState.hp + rv.healAmount);
+      showCenterPopup("❤️ HP回復！", 1200);
+      break;
+    case "gauge":
+      gameState.gauge = 100;
+      showCenterPopup("⚡ 必殺ゲージMAX！", 1200);
+      break;
+    case "speed":
+      gameState.speedBuffTimer = rv.speedBoostDurationSec;
+      showCenterPopup("💨 素早さアップ！", 1200);
+      break;
+    case "freeze":
+      gameState.enemyFreezeTimer = rv.freezeDurationSec;
+      showCenterPopup("❄️ 敵の動きを停止！", 1200);
+      break;
+    case "bomb": {
+      const targets = gameState.enemies.filter(e=>!e.dead);
+      if(gameState.boss && !gameState.boss.dead) targets.push(gameState.boss);
+      targets.forEach(en=>{
+        const dist = Math.hypot(en.x-p.x, en.y-p.y);
+        if(dist <= BOMB_RADIUS_PX) damageEntityFlat(en, rv.bombDamage);
+      });
+      showCenterPopup("💣 爆発！", 1200);
+      break;
+    }
+  }
+}
+
+function updateChests(dt){
+  const p = gameState.player;
+  const cfg = DATA.map.chest;
+  gameState.chests.forEach(ch=>{
+    const dist = Math.hypot(p.x-ch.x, p.y-ch.y);
+    if(dist <= CHEST_OPEN_RADIUS_PX){
+      ch.openProgress += dt;
+    } else {
+      ch.openProgress = 0;
+    }
+  });
+  const opened = gameState.chests.filter(ch=>ch.openProgress >= cfg.openTimeSec);
+  if(opened.length>0){
+    gameState.chests = gameState.chests.filter(ch=>ch.openProgress < cfg.openTimeSec);
+    opened.forEach(()=>{
+      const type = CHEST_REWARD_TYPES[Math.floor(Math.random()*CHEST_REWARD_TYPES.length)];
+      applyChestReward(type);
+    });
+  }
+}
+
 /* ---- 接触ダメージ ---- */
 function handleContactDamage(en){
   const p = gameState.player;
@@ -1523,6 +1644,10 @@ function startGame(){
     coinScore: 0,
     coinCount: 0,
     coinSpawnTimer: DATA.map.coin.spawnIntervalSec,
+    chests: [],
+    chestSpawnTimer: DATA.map.chest.spawnIntervalSec,
+    speedBuffTimer: 0,
+    enemyFreezeTimer: 0,
     boss: null,
     bossKills: 0,
     bossEventTriggered: false,
@@ -1649,16 +1774,31 @@ function loop(now){
       gameState.coinSpawnTimer = DATA.map.coin.spawnIntervalSec;
     }
 
+    // 宝箱スポーン
+    gameState.chestSpawnTimer -= dt;
+    if(gameState.chestSpawnTimer<=0 && gameState.chests.length < DATA.map.chest.maxOnMap){
+      spawnChest();
+      gameState.chestSpawnTimer = DATA.map.chest.spawnIntervalSec;
+    }
+
+    // 状態異常タイマー
+    if(gameState.speedBuffTimer>0) gameState.speedBuffTimer -= dt;
+    if(gameState.enemyFreezeTimer>0) gameState.enemyFreezeTimer -= dt;
+    const enemiesFrozen = gameState.enemyFreezeTimer > 0;
+
     updatePlayerMove(dt, gameState.grid);
     revealAround(gameState.player.x, gameState.player.y, VISION_RADIUS);
+    updateChests(dt);
 
     gameState.enemies.forEach(en=>{
       if(en.dead){
         en.deathAnim -= dt;
         if(en.flash>0) en.flash -= dt;
       } else {
-        updateChaser(en, ENEMY_SPEED, dt, gameState.grid);
-        handleContactDamage(en);
+        if(!enemiesFrozen){
+          updateChaser(en, ENEMY_SPEED, dt, gameState.grid);
+          handleContactDamage(en);
+        }
         if(en.flash>0) en.flash -= dt;
       }
     });
@@ -1670,8 +1810,10 @@ function loop(now){
         if(gameState.boss.flash>0) gameState.boss.flash -= dt;
         if(gameState.boss.deathAnim <= -0.3) gameState.boss = null;
       } else {
-        updateChaser(gameState.boss, BOSS_SPEED, dt, gameState.grid);
-        handleContactDamage(gameState.boss);
+        if(!enemiesFrozen){
+          updateChaser(gameState.boss, BOSS_SPEED, dt, gameState.grid);
+          handleContactDamage(gameState.boss);
+        }
         if(gameState.boss.flash>0) gameState.boss.flash -= dt;
       }
     }
@@ -1756,6 +1898,23 @@ function render(){
     ctx.fillText("🪙", co.x-camX, co.y-camY);
   });
 
+  gameState.chests.forEach(ch=>{
+    if(!exploredGrid[ch.r] || !exploredGrid[ch.r][ch.c]) return;
+    const sx = ch.x-camX, sy = ch.y-camY;
+    ctx.font = (TILE_SIZE*0.8)+"px sans-serif";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(DATA.map.chest.emoji, sx, sy);
+    if(ch.openProgress > 0){
+      const ratio = Math.min(1, ch.openProgress/DATA.map.chest.openTimeSec);
+      const barW = TILE_SIZE*0.9;
+      const barX = sx-barW/2, barY = sy-TILE_SIZE*0.65;
+      ctx.fillStyle = "#eee";
+      ctx.fillRect(barX,barY,barW,4);
+      ctx.fillStyle = "#e53935";
+      ctx.fillRect(barX,barY,barW*ratio,4);
+    }
+  });
+
   if(gameState.gate){
     const g = gameState.gate;
     if(exploredGrid[g.r] && exploredGrid[g.r][g.c]){
@@ -1825,7 +1984,10 @@ function updateTopUI(){
   document.getElementById("timer-display").textContent = gameState.survivalTime.toFixed(1);
   document.getElementById("kill-count").textContent = gameState.kills;
   document.getElementById("coin-count").textContent = gameState.coinScore;
-  document.getElementById("combo-display").textContent = gameState.combo>1 ? (gameState.combo+" combo") : "";
+  let statusText = gameState.combo>1 ? (gameState.combo+" combo") : "";
+  if(gameState.speedBuffTimer>0) statusText += " 💨"+gameState.speedBuffTimer.toFixed(1);
+  if(gameState.enemyFreezeTimer>0) statusText += " ❄️"+gameState.enemyFreezeTimer.toFixed(1);
+  document.getElementById("combo-display").textContent = statusText;
   document.getElementById("difficulty-display").textContent = gameState.difficulty.icon+" "+gameState.difficulty.label;
   const gaugeEl = document.getElementById("gauge-bar");
   gaugeEl.style.width = gameState.gauge+"%";
