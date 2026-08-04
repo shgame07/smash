@@ -189,7 +189,7 @@
       <button class="btn home-btn" data-nav="customize">🎭 キャラ設定</button>
       <button class="btn home-btn" data-nav="account">👤 アカウント</button>
     </div>
-    <div style="text-align:center;font-size:11px;color:#bbb;padding-bottom:6px;">v 1.0.3</div>
+    <div style="text-align:center;font-size:11px;color:#bbb;padding-bottom:6px;">v 1.1.0</div>
   </div>
 
   <!-- ===== キャラクター選択 ===== -->
@@ -214,7 +214,7 @@
         <span class="hp-text" id="hp-text">100 / 100</span>
       </div>
       <div class="mid-row">
-        <span class="kill-display">👾 × <span id="kill-count">0</span> <span class="combo-display" id="combo-display"></span></span>
+        <span class="kill-display">👾 × <span id="kill-count">0</span> 🪙 <span id="coin-count">0</span> <span class="combo-display" id="combo-display"></span></span>
         <span class="timer-display">⏱ <span id="timer-display">0.0</span> sec</span>
         <span class="difficulty-display" id="difficulty-display">🟢 EASY</span>
       </div>
@@ -241,14 +241,16 @@
   <!-- ===== リザルト画面 ===== -->
   <div id="screen-result" class="screen hidden">
     <div class="center-col" style="justify-content:flex-start;padding-top:40px;">
-      <div class="title" style="margin-bottom:4px;">GAME OVER</div>
+      <div class="title" style="margin-bottom:4px;" id="result-title">GAME OVER</div>
       <div class="result-score" id="result-score">0</div>
       <div style="width:100%;max-width:320px;">
         <div class="row"><span class="label">生存時間</span><span class="value" id="result-time">0.0秒</span></div>
         <div class="divider"></div>
         <div class="row"><span class="label">撃破数</span><span class="value" id="result-kills">0</span></div>
         <div class="divider"></div>
-        <div class="row"><span class="label">最大コンボ</span><span class="value" id="result-combo">0</span></div>
+        <div class="row"><span class="label">獲得コイン</span><span class="value" id="result-coins">0</span></div>
+        <div class="divider"></div>
+        <div class="row"><span class="label">鬼討伐数</span><span class="value" id="result-boss">0</span></div>
       </div>
       <div id="result-newrecord" class="info-msg hidden" style="color:var(--red);font-weight:800;font-size:15px;">NEW RECORD!</div>
       <div style="width:100%;max-width:320px;margin-top:24px;">
@@ -988,79 +990,478 @@ async function renderRanking(){
 }
 
 /* ==========================================================
-   ゲーム本体
+   ゲーム本体（俯瞰視点・ランダム迷路探索サバイバル）
    ========================================================== */
-const LOGICAL_W = 480, LOGICAL_H = 700; // ステージを1.2倍横長に
-const PLAYER_RADIUS = 19, ENEMY_RADIUS = 19; // 1.2倍サイズ
-const GRAVITY = 1500;
-const JUMP_VELOCITY = -580;
-const MOVE_SPEED = 204; // 1.2倍速度
-const ENEMY_SPEED = 114; // 1.2倍速度
-const CIRCLE_UNIT = 62; // 「○1個分」の距離換算
-const FRICTION_KNOCKBACK = 900;
+const TILE = { WALL:1, FLOOR:0 };
 
-// ジャンプで届く高さ・横距離の目安（足場配置の妥当性チェック用）
-const MAX_JUMP_HEIGHT = (JUMP_VELOCITY*JUMP_VELOCITY)/(2*GRAVITY); // 約112px
-const JUMP_AIR_TIME = 2*(-JUMP_VELOCITY/GRAVITY);                  // 約0.77sec
+let TILE_SIZE = 38, MAP_SIZE = 64, VIEW_TILES = 17, VIEWPORT_PX = 17*38;
+let PLAYER_SPEED = 3*38, ENEMY_SPEED = 4*38, BOSS_SPEED = 3*38;
+let VISION_RADIUS = 2;
 
-const PLATFORMS = [
-  { x1:0,   x2:480, y:600, passableFromBelow:false }, // 最下段の床（1.2倍長・やや上に配置）
-  { x1:20,  x2:190, y:500, passableFromBelow:true },  // 左足場（床から100px上＝ジャンプで届く）
-  { x1:290, x2:460, y:500, passableFromBelow:true },  // 右足場
-  { x1:170, x2:310, y:400, passableFromBelow:true },  // 中央上足場
-];
+const DIR_VECTORS = {
+  up:    { x:0,  y:-1 },
+  down:  { x:0,  y:1 },
+  left:  { x:-1, y:0 },
+  right: { x:1,  y:0 }
+};
 
-// 敵AI用：足場同士の到達可能グラフ（ジャンプ高さ・横移動距離から算出）
-function buildPlatformGraph(){
-  const maxHorizontal = ENEMY_SPEED * JUMP_AIR_TIME; // ジャンプ滞空中に移動できる横距離の目安
-  const graph = PLATFORMS.map(()=>[]);
-  for(let i=0;i<PLATFORMS.length;i++){
-    for(let j=0;j<PLATFORMS.length;j++){
-      if(i===j) continue;
-      const a = PLATFORMS[i], b = PLATFORMS[j];
-      const risingUp = b.y < a.y; // yが小さいほど上
-      const verticalOk = risingUp ? (a.y - b.y) <= (MAX_JUMP_HEIGHT + 8) : true; // 下りは自由落下でOK
-      const overlap = Math.max(a.x1,b.x1) <= Math.min(a.x2,b.x2);
-      const gap = overlap ? 0 : Math.max(a.x1-b.x2, b.x1-a.x2);
-      const horizontalOk = gap <= maxHorizontal;
-      if(verticalOk && horizontalOk) graph[i].push(j);
-    }
-  }
-  return graph;
+function applyMapConfig(){
+  const m = DATA.map;
+  TILE_SIZE = m.tileSize;
+  MAP_SIZE = m.mapSize;
+  VIEW_TILES = m.viewTiles;
+  VIEWPORT_PX = VIEW_TILES * TILE_SIZE;
+  PLAYER_SPEED = m.playerSpeedTilesPerSec * TILE_SIZE;
+  ENEMY_SPEED = m.enemySpeedTilesPerSec * TILE_SIZE;
+  BOSS_SPEED = m.boss.speedTilesPerSec * TILE_SIZE;
+  VISION_RADIUS = m.visionRadiusTiles;
 }
-const PLATFORM_GRAPH = buildPlatformGraph();
 
-function findPlatformPath(fromIdx, toIdx){
-  if(fromIdx===toIdx) return [fromIdx];
-  const visited = new Set([fromIdx]);
-  const queue = [[fromIdx]];
-  while(queue.length){
-    const path = queue.shift();
-    const last = path[path.length-1];
-    for(const next of PLATFORM_GRAPH[last]){
-      if(next===toIdx) return path.concat(next);
-      if(!visited.has(next)){
-        visited.add(next);
-        queue.push(path.concat(next));
+function shuffle(arr){
+  for(let i=arr.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]] = [arr[j],arr[i]];
+  }
+  return arr;
+}
+
+function isWall(grid, r, c){
+  if(r<0||r>=MAP_SIZE||c<0||c>=MAP_SIZE) return true;
+  return grid[r][c]===TILE.WALL;
+}
+
+function tileOf(px,py){ return { r: Math.floor(py/TILE_SIZE), c: Math.floor(px/TILE_SIZE) }; }
+function tileCenterPx(r,c){ return { x: c*TILE_SIZE+TILE_SIZE/2, y: r*TILE_SIZE+TILE_SIZE/2 }; }
+
+function countFloorTiles(grid){
+  let n=0;
+  for(let r=0;r<MAP_SIZE;r++) for(let c=0;c<MAP_SIZE;c++) if(grid[r][c]===TILE.FLOOR) n++;
+  return n;
+}
+
+/* ---- マップ生成（ランダム迷路＋広場＋ループ） ---- */
+function generateMaze(){
+  const size = MAP_SIZE;
+  const grid = Array.from({length:size}, ()=>Array(size).fill(TILE.WALL));
+  const cellCount = Math.floor((size-1)/2); // 例: 64→31
+
+  const cellVisited = Array.from({length:cellCount}, ()=>Array(cellCount).fill(false));
+  const toTile = (cr,cc)=>({ r: cr*2+1, c: cc*2+1 });
+  const carve = (r,c)=>{ grid[r][c] = TILE.FLOOR; };
+
+  const startCell = { r: Math.floor(cellCount/2), c: Math.floor(cellCount/2) };
+  const stack = [startCell];
+  cellVisited[startCell.r][startCell.c] = true;
+  const t0 = toTile(startCell.r, startCell.c);
+  carve(t0.r, t0.c);
+
+  while(stack.length){
+    const cur = stack[stack.length-1];
+    const neighbors = shuffle([
+      {r:cur.r-1,c:cur.c}, {r:cur.r+1,c:cur.c},
+      {r:cur.r,c:cur.c-1}, {r:cur.r,c:cur.c+1}
+    ]).filter(n=> n.r>=0 && n.r<cellCount && n.c>=0 && n.c<cellCount && !cellVisited[n.r][n.c]);
+
+    if(neighbors.length===0){ stack.pop(); continue; }
+    const next = neighbors[0];
+    cellVisited[next.r][next.c] = true;
+    const curTile = toTile(cur.r, cur.c);
+    const nextTile = toTile(next.r, next.c);
+    carve(nextTile.r, nextTile.c);
+    carve((curTile.r+nextTile.r)/2, (curTile.c+nextTile.c)/2);
+    stack.push(next);
+  }
+
+  // ループ生成：まだ繋がっていない隣接セル間の壁を確率で削る
+  const loopChance = DATA.map.loopChance;
+  for(let cr=0; cr<cellCount; cr++){
+    for(let cc=0; cc<cellCount; cc++){
+      if(cc+1<cellCount && Math.random() < loopChance){
+        const a = toTile(cr,cc), b = toTile(cr,cc+1);
+        grid[(a.r+b.r)/2][(a.c+b.c)/2] = TILE.FLOOR;
+      }
+      if(cr+1<cellCount && Math.random() < loopChance){
+        const a = toTile(cr,cc), b = toTile(cr+1,cc);
+        grid[(a.r+b.r)/2][(a.c+b.c)/2] = TILE.FLOOR;
       }
     }
   }
-  return null; // 経路が無い場合（通常は発生しない）
+
+  // 広場（5か所、スポーン地点含む）
+  const plazaSize = DATA.map.plazaSize;
+  const half = Math.floor(plazaSize/2);
+  function carvePlaza(cr,cc){
+    const t = toTile(cr,cc);
+    for(let dr=-half; dr<=half; dr++){
+      for(let dc=-half; dc<=half; dc++){
+        const rr=t.r+dr, ccx=t.c+dc;
+        if(rr>=1 && rr<size-1 && ccx>=1 && ccx<size-1) grid[rr][ccx]=TILE.FLOOR;
+      }
+    }
+    return t;
+  }
+
+  function countExits(cr,cc){
+    let n=0;
+    const t = toTile(cr,cc);
+    [[t.r-2,t.c],[t.r+2,t.c],[t.r,t.c-2],[t.r,t.c+2]].forEach(([rr,cc2])=>{
+      const wr=(t.r+rr)/2, wc=(t.c+cc2)/2;
+      if(rr>=0 && rr<size && cc2>=0 && cc2<size && grid[wr] && grid[wr][wc]===TILE.FLOOR) n++;
+    });
+    return n;
+  }
+
+  const centerCell = { r:Math.floor(cellCount/2), c:Math.floor(cellCount/2) };
+  let spawnCell = centerCell;
+  if(countExits(centerCell.r,centerCell.c) < 2){
+    outerSearch:
+    for(let radius=1; radius<cellCount; radius++){
+      for(let dr=-radius; dr<=radius; dr++){
+        for(let dc=-radius; dc<=radius; dc++){
+          const cr=centerCell.r+dr, cc=centerCell.c+dc;
+          if(cr<0||cr>=cellCount||cc<0||cc>=cellCount) continue;
+          if(countExits(cr,cc)>=2){ spawnCell={r:cr,c:cc}; break outerSearch; }
+        }
+      }
+    }
+  }
+  const spawnTileCoord = carvePlaza(spawnCell.r, spawnCell.c);
+
+  const plazaCount = DATA.map.plazaCount;
+  let placed = 0, attempts = 0;
+  while(placed < plazaCount-1 && attempts < 300){
+    attempts++;
+    const cr = 2+Math.floor(Math.random()*(cellCount-4));
+    const cc = 2+Math.floor(Math.random()*(cellCount-4));
+    const dist = Math.hypot(cr-spawnCell.r, cc-spawnCell.c);
+    if(dist < cellCount*0.22) continue;
+    carvePlaza(cr,cc);
+    placed++;
+  }
+
+  return { grid, spawnTile: spawnTileCoord };
 }
 
-function getStandingPlatformIndex(ent){
-  let best=-1, bestDist=Infinity;
-  for(let i=0;i<PLATFORMS.length;i++){
-    const p = PLATFORMS[i];
-    if(ent.x+ent.radius < p.x1 || ent.x-ent.radius > p.x2) continue;
-    const d = Math.abs((ent.y+ent.radius) - p.y);
-    if(d < bestDist){ bestDist = d; best = i; }
+/* ---- 経路探索（BFS） ---- */
+function bfsPath(grid, startR, startC, goalR, goalC){
+  if(startR===goalR && startC===goalC) return [];
+  const visited = new Set([startR+","+startC]);
+  const queue = [{ r:startR, c:startC, path:[] }];
+  let steps = 0;
+  const maxSteps = 5000;
+  while(queue.length && steps < maxSteps){
+    steps++;
+    const cur = queue.shift();
+    const dirs = [[-1,0],[1,0],[0,-1],[0,1]];
+    for(const [dr,dc] of dirs){
+      const nr = cur.r+dr, nc = cur.c+dc;
+      const key = nr+","+nc;
+      if(isWall(grid,nr,nc) || visited.has(key)) continue;
+      const newPath = cur.path.concat([{r:nr,c:nc}]);
+      if(nr===goalR && nc===goalC) return newPath;
+      visited.add(key);
+      queue.push({ r:nr, c:nc, path:newPath });
+    }
   }
-  if(best!==-1) return best;
-  for(let i=0;i<PLATFORMS.length;i++){
-    if(PLATFORMS[i].y >= ent.y && (best===-1 || PLATFORMS[i].y < PLATFORMS[best].y)) best = i;
+  return null;
+}
+
+/* ---- 視界（探索済みマップ） ---- */
+let exploredGrid = null;
+function initExplored(){
+  exploredGrid = Array.from({length:MAP_SIZE}, ()=> new Uint8Array(MAP_SIZE));
+}
+function revealAround(px,py,radiusTiles){
+  const t = tileOf(px,py);
+  const rad = Math.ceil(radiusTiles);
+  for(let dr=-rad; dr<=rad; dr++){
+    for(let dc=-rad; dc<=rad; dc++){
+      const rr=t.r+dr, cc=t.c+dc;
+      if(rr<0||rr>=MAP_SIZE||cc<0||cc>=MAP_SIZE) continue;
+      if(Math.hypot(dr,dc) <= radiusTiles+0.5) exploredGrid[rr][cc]=1;
+    }
   }
-  return best!==-1 ? best : 0;
+}
+function resetExploredExceptAround(px,py,radiusTiles){
+  initExplored();
+  revealAround(px,py,radiusTiles);
+}
+function countExploredFloorTiles(){
+  let n=0;
+  for(let r=0;r<MAP_SIZE;r++) for(let c=0;c<MAP_SIZE;c++){
+    if(gameState.grid[r][c]===TILE.FLOOR && exploredGrid[r][c]) n++;
+  }
+  return n;
+}
+function getExploredRatio(){
+  return gameState.totalFloorTiles>0 ? countExploredFloorTiles()/gameState.totalFloorTiles : 0;
+}
+
+/* ---- 衝突判定つき移動 ---- */
+function moveWithCollision(ent, dx, dy, grid){
+  const r = ent.radius;
+  if(dx!==0){
+    const nx = ent.x+dx;
+    const corners = [
+      {x:nx-r,y:ent.y-r},{x:nx+r,y:ent.y-r},
+      {x:nx-r,y:ent.y+r},{x:nx+r,y:ent.y+r}
+    ];
+    const blocked = corners.some(pt=>{ const t=tileOf(pt.x,pt.y); return isWall(grid,t.r,t.c); });
+    if(!blocked) ent.x = Math.max(0, Math.min(MAP_SIZE*TILE_SIZE, nx));
+  }
+  if(dy!==0){
+    const ny = ent.y+dy;
+    const corners = [
+      {x:ent.x-r,y:ny-r},{x:ent.x+r,y:ny-r},
+      {x:ent.x-r,y:ny+r},{x:ent.x+r,y:ny+r}
+    ];
+    const blocked = corners.some(pt=>{ const t=tileOf(pt.x,pt.y); return isWall(grid,t.r,t.c); });
+    if(!blocked) ent.y = Math.max(0, Math.min(MAP_SIZE*TILE_SIZE, ny));
+  }
+}
+
+/* ---- 敵/ボスの追跡AI ---- */
+function updateChaser(ent, speed, dt, grid){
+  ent.aiTimer = (ent.aiTimer||0) - dt*1000;
+  if(ent.aiTimer <= 0){
+    ent.aiTimer = 500;
+    const p = gameState.player;
+    const from = tileOf(ent.x, ent.y);
+    const to = tileOf(p.x, p.y);
+    ent.path = bfsPath(grid, from.r, from.c, to.r, to.c);
+  }
+  if(ent.path && ent.path.length>0){
+    const next = ent.path[0];
+    const target = tileCenterPx(next.r, next.c);
+    const dx = target.x-ent.x, dy = target.y-ent.y;
+    const dist = Math.hypot(dx,dy);
+    if(dist < 4){
+      ent.path.shift();
+    } else {
+      moveWithCollision(ent, (dx/dist)*speed*dt, (dy/dist)*speed*dt, grid);
+      if(Math.abs(dx) > Math.abs(dy)) ent.facing = dx>0 ? "right":"left";
+      else ent.facing = dy>0 ? "down":"up";
+    }
+  }
+}
+
+/* ---- プレイヤー移動 ---- */
+function updatePlayerMove(dt, grid){
+  const p = gameState.player;
+  const dir = gameState.input.dir;
+  if(dir.x!==0 || dir.y!==0){
+    let mx=0, my=0;
+    if(Math.abs(dir.x) >= Math.abs(dir.y)){ mx = Math.sign(dir.x); p.facing = mx>0?"right":"left"; }
+    else { my = Math.sign(dir.y); p.facing = my>0?"down":"up"; }
+    moveWithCollision(p, mx*PLAYER_SPEED*dt, my*PLAYER_SPEED*dt, grid);
+  }
+}
+
+/* ---- 攻撃（直線・壁で遮断） ---- */
+function performAttack(atkData){
+  const p = gameState.player;
+  const dir = DIR_VECTORS[p.facing];
+  const maxDist = atkData.range * TILE_SIZE;
+  const grid = gameState.grid;
+
+  let blockDist = maxDist;
+  const step = TILE_SIZE*0.4;
+  for(let d=step; d<=maxDist; d+=step){
+    const t = tileOf(p.x+dir.x*d, p.y+dir.y*d);
+    if(isWall(grid, t.r, t.c)){ blockDist = d-step; break; }
+  }
+
+  const candidates = gameState.enemies.filter(e=>!e.dead);
+  if(gameState.boss && !gameState.boss.dead) candidates.push(gameState.boss);
+
+  const targets = [];
+  candidates.forEach(en=>{
+    const relX = en.x-p.x, relY = en.y-p.y;
+    const along = relX*dir.x + relY*dir.y;
+    const perp = Math.abs(relX*dir.y - relY*dir.x);
+    if(along < 0 || along > blockDist) return;
+    if(perp > TILE_SIZE*0.5) return;
+    targets.push({en, along});
+  });
+  if(targets.length===0) return;
+  targets.sort((a,b)=>a.along-b.along);
+  const hitList = atkData.pierce ? targets : [targets[0]];
+  hitList.forEach(h=> damageEnemy(h.en, atkData.power, p.facing));
+}
+
+function damageEnemy(en, power, facingDir){
+  en.hp -= power;
+  en.flash = 0.15;
+  const dir = DIR_VECTORS[facingDir];
+  moveWithCollision(en, dir.x*TILE_SIZE*0.8, dir.y*TILE_SIZE*0.8, gameState.grid);
+  if(en.hp <= 0 && !en.dead){
+    en.dead = true;
+    en.deathAnim = 0.2;
+    onEnemyKilled(en===gameState.boss);
+  }
+}
+
+function onEnemyKilled(isBoss){
+  gameState.kills++;
+  const now = performance.now();
+  if(now - gameState.lastKillTime <= DATA.config.comboTimeoutMs) gameState.combo++;
+  else gameState.combo = 1;
+  gameState.lastKillTime = now;
+  if(gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
+  gameState.gauge = Math.min(100, gameState.gauge + DATA.config.specialGaugePerKill);
+
+  if(isBoss){
+    gameState.bossKills++;
+    gameState.bossRespawnTimer = DATA.map.boss.respawnCooldownSec;
+    if(gameState.bossKills===1) spawnEscapeGate();
+  }
+}
+
+function spawnEffect(text, life){
+  const dir = DIR_VECTORS[gameState.player.facing];
+  gameState.effects.push({
+    text, life, maxLife:life,
+    x: gameState.player.x+dir.x*TILE_SIZE*0.6,
+    y: gameState.player.y+dir.y*TILE_SIZE*0.6
+  });
+}
+
+/* ---- 敵スポーン ---- */
+function findEnemySpawnTile(){
+  const minDist = DATA.map.enemyMinDistanceTiles;
+  const p = gameState.player;
+  const pt = tileOf(p.x,p.y);
+  const ratio = getExploredRatio();
+  const wantUnexplored = ratio < DATA.map.exploredRatioThreshold;
+  for(let attempt=0; attempt<80; attempt++){
+    const r = Math.floor(Math.random()*MAP_SIZE);
+    const c = Math.floor(Math.random()*MAP_SIZE);
+    if(gameState.grid[r][c]!==TILE.FLOOR) continue;
+    if(Math.hypot(r-pt.r, c-pt.c) < minDist) continue;
+    const explored = !!exploredGrid[r][c];
+    if(wantUnexplored && explored) continue;
+    return {r,c};
+  }
+  return null;
+}
+function spawnEnemy(){
+  const tile = findEnemySpawnTile();
+  if(!tile) return;
+  const def = gameState.enemyDef;
+  const center = tileCenterPx(tile.r, tile.c);
+  gameState.enemies.push({
+    x:center.x, y:center.y, radius: TILE_SIZE*0.35,
+    hp:def.hp, maxHp:def.hp, atk:def.atk, atkInterval: def.atkIntervalSec*1000,
+    facing:"down", lastAttackTime:-99999, aiTimer:Math.random()*500, dead:false, flash:0, deathAnim:0, path:null
+  });
+}
+
+/* ---- ボス ---- */
+function findBossSpawnTile(){
+  const p = gameState.player;
+  const pt = tileOf(p.x,p.y);
+  const minDist = Math.max(VIEW_TILES, 12);
+  const candidates = [];
+  for(let attempt=0; attempt<150; attempt++){
+    const r = Math.floor(Math.random()*MAP_SIZE);
+    const c = Math.floor(Math.random()*MAP_SIZE);
+    if(gameState.grid[r][c]!==TILE.FLOOR) continue;
+    const dist = Math.hypot(r-pt.r, c-pt.c);
+    if(dist < minDist) continue;
+    candidates.push({ r, c, explored: !!exploredGrid[r][c] });
+  }
+  if(candidates.length===0) return null;
+  const unexplored = candidates.filter(x=>!x.explored);
+  const pool = unexplored.length>0 ? unexplored : candidates;
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+function spawnBoss(){
+  const tile = findBossSpawnTile();
+  if(!tile) return;
+  const bd = DATA.map.boss;
+  const center = tileCenterPx(tile.r, tile.c);
+  gameState.boss = {
+    x:center.x, y:center.y, radius: TILE_SIZE*0.4,
+    hp:bd.hp, maxHp:bd.hp, atk:bd.atk, atkInterval: bd.atkIntervalSec*1000,
+    facing:"down", lastAttackTime:-99999, aiTimer:Math.random()*500, dead:false, flash:0, deathAnim:0, path:null
+  };
+  showCenterPopup(bd.emoji+" "+bd.name+"が出現！", 2000);
+}
+function spawnEscapeGate(){
+  for(let attempt=0; attempt<80; attempt++){
+    const r = Math.floor(Math.random()*MAP_SIZE);
+    const c = Math.floor(Math.random()*MAP_SIZE);
+    if(gameState.grid[r][c]!==TILE.FLOOR) continue;
+    const center = tileCenterPx(r,c);
+    gameState.gate = { r, c, x:center.x, y:center.y };
+    showCenterPopup((DATA.map.gate?DATA.map.gate.emoji:"🚪")+" 脱出ゲートが出現！", 2000);
+    return;
+  }
+}
+
+/* ---- コイン ---- */
+function pickCoinValue(){
+  const values = DATA.map.coin.values;
+  const total = values.reduce((s,v)=>s+v.weight,0);
+  let r = Math.random()*total;
+  for(const v of values){ if(r<v.weight) return v.value; r-=v.weight; }
+  return values[0].value;
+}
+function findCoinSpawnTile(){
+  const minDist = DATA.map.coin.minDistanceTiles;
+  const p = gameState.player;
+  const pt = tileOf(p.x,p.y);
+  for(let attempt=0; attempt<60; attempt++){
+    const r = Math.floor(Math.random()*MAP_SIZE);
+    const c = Math.floor(Math.random()*MAP_SIZE);
+    if(gameState.grid[r][c]!==TILE.FLOOR) continue;
+    if(Math.hypot(r-pt.r, c-pt.c) < minDist) continue;
+    if(gameState.coins.some(co=>co.r===r && co.c===c)) continue;
+    return {r,c};
+  }
+  return null;
+}
+function spawnCoin(){
+  const tile = findCoinSpawnTile();
+  if(!tile) return;
+  const center = tileCenterPx(tile.r, tile.c);
+  gameState.coins.push({ r:tile.r, c:tile.c, x:center.x, y:center.y, value: pickCoinValue() });
+}
+function handleCoinPickup(){
+  const p = gameState.player;
+  gameState.coins = gameState.coins.filter(co=>{
+    const dist = Math.hypot(p.x-co.x, p.y-co.y);
+    if(dist < p.radius+TILE_SIZE*0.3){
+      gameState.coinScore += co.value;
+      gameState.coinCount++;
+      return false;
+    }
+    return true;
+  });
+}
+function handleGateCheck(){
+  if(!gameState.gate) return;
+  const p = gameState.player;
+  const dist = Math.hypot(p.x-gameState.gate.x, p.y-gameState.gate.y);
+  if(dist < p.radius+TILE_SIZE*0.4) endGame(true);
+}
+
+/* ---- 接触ダメージ ---- */
+function handleContactDamage(en){
+  const p = gameState.player;
+  const dist = Math.hypot(p.x-en.x, p.y-en.y);
+  if(dist < p.radius+en.radius){
+    const now = performance.now();
+    if(now - en.lastAttackTime >= en.atkInterval){
+      en.lastAttackTime = now;
+      gameState.hp = Math.max(0, gameState.hp - en.atk);
+      const dx = p.x-en.x, dy = p.y-en.y;
+      const dir = Math.abs(dx) > Math.abs(dy) ? {x:Math.sign(dx)||1,y:0} : {x:0,y:Math.sign(dy)||1};
+      moveWithCollision(p, dir.x*TILE_SIZE*0.7, dir.y*TILE_SIZE*0.7, gameState.grid);
+      gameState.playerFlash = 0.15;
+      if(gameState.hp <= 0) endGame(false);
+    }
+  }
 }
 
 let canvas, ctx;
@@ -1074,12 +1475,13 @@ function initCanvas(){
   window.addEventListener("resize", resizeCanvas);
 }
 function resizeCanvas(){
+  if(DATA && DATA.map) applyMapConfig();
   const wrap = document.getElementById("stage-wrap");
   const wrapW = wrap.clientWidth, wrapH = wrap.clientHeight;
-  const scale = Math.min(wrapW/LOGICAL_W, wrapH/LOGICAL_H);
-  canvas.width = LOGICAL_W; canvas.height = LOGICAL_H;
-  canvas.style.width = (LOGICAL_W*scale)+"px";
-  canvas.style.height = (LOGICAL_H*scale)+"px";
+  const scale = Math.min(wrapW/VIEWPORT_PX, wrapH/VIEWPORT_PX);
+  canvas.width = VIEWPORT_PX; canvas.height = VIEWPORT_PX;
+  canvas.style.width = (VIEWPORT_PX*scale)+"px";
+  canvas.style.height = (VIEWPORT_PX*scale)+"px";
 }
 
 function getDifficultyForTime(t){
@@ -1088,16 +1490,17 @@ function getDifficultyForTime(t){
   return cur;
 }
 
-function makeEntity(x,y,radius){
-  return { x, y, vx:0, vy:0, radius, grounded:false, facing:1 };
-}
-
 function startGame(){
+  applyMapConfig();
   resizeCanvas();
+
   const enemyDef = DATA.enemies[0];
   const atk = DATA.attacks.find(a=>a.id===player.equippedAttack) || DATA.attacks[0];
   const spc = DATA.specials.find(s=>s.id===player.equippedSpecial) || DATA.specials[0];
   const skin = DATA.skins.find(s=>s.id===player.equippedSkin) || DATA.skins[0];
+
+  const { grid, spawnTile } = generateMaze();
+  const spawnCenter = tileCenterPx(spawnTile.r, spawnTile.c);
 
   gameState = {
     startTime: performance.now(),
@@ -1112,399 +1515,316 @@ function startGame(){
     lastKillTime: 0,
     difficulty: DATA.difficulty[0],
     spawnTimer: 0,
-    aiTimer: 0,
+    grid,
+    totalFloorTiles: countFloorTiles(grid),
     enemies: [],
     effects: [],
+    coins: [],
+    coinScore: 0,
+    coinCount: 0,
+    coinSpawnTimer: DATA.map.coin.spawnIntervalSec,
+    boss: null,
+    bossKills: 0,
+    bossEventTriggered: false,
+    bossRespawnTimer: 0,
+    gate: null,
     over: false,
+    cleared: false,
     atk, spc, skin, enemyDef,
-    player: makeEntity(240, 560, PLAYER_RADIUS),
-    input: { dir:0 }
+    player: { x:spawnCenter.x, y:spawnCenter.y, radius: TILE_SIZE*0.35, facing:"down" },
+    input: { dir: {x:0,y:0} }
   };
-  gameState.player.grounded = true;
 
-  updateTopUI(true);
+  initExplored();
+  revealAround(gameState.player.x, gameState.player.y, VISION_RADIUS);
+
+  updateTopUI();
   hideCenterPopup();
   if(rafId) cancelAnimationFrame(rafId);
   rafId = requestAnimationFrame(loop);
 }
 
-/* ---- 入力 ---- */
+/* ---- 入力（ドラッグ移動／タップ攻撃／長押しで必殺技） ---- */
 let touchStart = null;
+let holdTimer = null;
+const HOLD_MS = 450;
+const MOVE_THRESHOLD = 10;
+
 function setupInput(){
   const area = document.getElementById("game-input-area");
-  area.addEventListener("touchstart", (e)=>{
-    const t = e.changedTouches[0];
-    touchStart = { x:t.clientX, y:t.clientY, time:performance.now(), moved:false };
-  }, {passive:true});
-  area.addEventListener("touchmove", (e)=>{
+
+  function onStart(x,y){
+    touchStart = { x, y, time:performance.now(), moved:false, usedHold:false };
+    if(holdTimer) clearTimeout(holdTimer);
+    holdTimer = setTimeout(()=>{
+      if(touchStart && !touchStart.moved){
+        touchStart.usedHold = true;
+        doSpecial();
+      }
+    }, HOLD_MS);
+  }
+  function onMove(x,y){
     if(!touchStart || !gameState) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - touchStart.x;
-    if(Math.abs(dx) > 8){
+    const dx = x-touchStart.x, dy = y-touchStart.y;
+    if(Math.abs(dx) > MOVE_THRESHOLD || Math.abs(dy) > MOVE_THRESHOLD){
       touchStart.moved = true;
-      gameState.input.dir = dx > 0 ? 1 : -1;
+      if(holdTimer){ clearTimeout(holdTimer); holdTimer=null; }
+      if(Math.abs(dx) >= Math.abs(dy)) gameState.input.dir = { x:Math.sign(dx), y:0 };
+      else gameState.input.dir = { x:0, y:Math.sign(dy) };
     }
-  }, {passive:true});
-  area.addEventListener("touchend", (e)=>{
-    if(!touchStart || !gameState) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - touchStart.x;
-    const dy = t.clientY - touchStart.y;
-    const dt = performance.now() - touchStart.time;
-    if(!touchStart.moved && dt < 250 && Math.abs(dx)<12 && Math.abs(dy)<12){
+  }
+  function onEnd(){
+    if(holdTimer){ clearTimeout(holdTimer); holdTimer=null; }
+    if(!touchStart){ return; }
+    const dt = performance.now()-touchStart.time;
+    if(!touchStart.moved && !touchStart.usedHold && dt < HOLD_MS){
       doNormalAttack();
-    } else if(dy < -40 && Math.abs(dy) > Math.abs(dx)){
-      doJump();
-    } else if(dy > 40 && Math.abs(dy) > Math.abs(dx)){
-      doSpecial();
     }
-    gameState.input.dir = 0;
+    if(gameState) gameState.input.dir = { x:0, y:0 };
     touchStart = null;
-  }, {passive:true});
+  }
 
-  // マウス操作対応（PCブラウザ確認用）
-  let mouseDown=false;
-  area.addEventListener("mousedown", (e)=>{
-    mouseDown=true;
-    touchStart = { x:e.clientX, y:e.clientY, time:performance.now(), moved:false };
-  });
-  area.addEventListener("mousemove", (e)=>{
-    if(!mouseDown || !touchStart || !gameState) return;
-    const dx = e.clientX - touchStart.x;
-    if(Math.abs(dx)>8){ touchStart.moved=true; gameState.input.dir = dx>0?1:-1; }
-  });
-  window.addEventListener("mouseup", (e)=>{
-    if(!mouseDown || !touchStart || !gameState){ mouseDown=false; return; }
-    mouseDown=false;
-    const dx = e.clientX - touchStart.x;
-    const dy = e.clientY - touchStart.y;
-    const dt = performance.now() - touchStart.time;
-    if(!touchStart.moved && dt<250 && Math.abs(dx)<12 && Math.abs(dy)<12){ doNormalAttack(); }
-    else if(dy < -40 && Math.abs(dy)>Math.abs(dx)){ doJump(); }
-    else if(dy > 40 && Math.abs(dy)>Math.abs(dx)){ doSpecial(); }
-    gameState.input.dir = 0;
-    touchStart = null;
-  });
+  area.addEventListener("touchstart", e=>{ const t=e.changedTouches[0]; onStart(t.clientX,t.clientY); }, {passive:true});
+  area.addEventListener("touchmove", e=>{ const t=e.changedTouches[0]; onMove(t.clientX,t.clientY); }, {passive:true});
+  area.addEventListener("touchend", ()=> onEnd(), {passive:true});
+
+  let mouseDown = false;
+  area.addEventListener("mousedown", e=>{ mouseDown=true; onStart(e.clientX,e.clientY); });
+  area.addEventListener("mousemove", e=>{ if(mouseDown) onMove(e.clientX,e.clientY); });
+  window.addEventListener("mouseup", ()=>{ if(!mouseDown) return; mouseDown=false; onEnd(); });
 }
 
-function doJump(){
-  if(!gameState || gameState.over) return;
-  const p = gameState.player;
-  if(p.grounded){ p.vy = JUMP_VELOCITY; p.grounded=false; }
-}
 function doNormalAttack(){
   if(!gameState || gameState.over) return;
-  performAttack(gameState.atk, false);
+  performAttack(gameState.atk);
   spawnEffect(gameState.atk.effect, 0.18);
 }
 function doSpecial(){
   if(!gameState || gameState.over) return;
   if(gameState.gauge < 100) return;
-  performAttack(gameState.spc, true);
+  performAttack(gameState.spc);
   spawnEffect(gameState.spc.effect+gameState.spc.effect+gameState.spc.effect, 0.3);
   gameState.gauge = 0;
-}
-
-function performAttack(atkData, isSpecial){
-  const p = gameState.player;
-  const facing = p.facing;
-  const rangePx = atkData.range * CIRCLE_UNIT;
-  const hits = [];
-  for(const en of gameState.enemies){
-    if(en.dead) continue;
-    const dx = (en.x - p.x) * facing;
-    const dy = p.y - en.y; // 上が正
-    const dist = Math.hypot(dx,dy);
-    if(dist > rangePx) continue;
-    if(dx < -6) continue; // 前方以外は除外
-    const angle = Math.atan2(Math.max(dy,-6), Math.max(dx,0)) * 180/Math.PI;
-    if(angle < -10 || angle > 100) continue;
-    hits.push({en, dist});
-  }
-  if(hits.length===0) return;
-  hits.sort((a,b)=>a.dist-b.dist);
-  const targets = atkData.pierce ? hits : [hits[0]];
-  targets.forEach(h=>{
-    damageEnemy(h.en, atkData.power, atkData.knockback, facing);
-  });
-}
-
-function damageEnemy(en, power, knockback, facing){
-  en.hp -= power;
-  en.flash = 0.12;
-  const kb = knockback==="medium" ? 260 : 140;
-  en.vx += facing*kb;
-  if(en.hp <= 0 && !en.dead){
-    en.dead = true;
-    en.deathAnim = 0.2;
-    onEnemyKilled();
-  }
-}
-
-function onEnemyKilled(){
-  gameState.kills++;
-  const now = performance.now();
-  if(now - gameState.lastKillTime <= DATA.config.comboTimeoutMs){
-    gameState.combo++;
-  } else {
-    gameState.combo = 1;
-  }
-  gameState.lastKillTime = now;
-  if(gameState.combo > gameState.maxCombo) gameState.maxCombo = gameState.combo;
-  gameState.gauge = Math.min(100, gameState.gauge + DATA.config.specialGaugePerKill);
-}
-
-function spawnEffect(text, life){
-  gameState.effects.push({ text, life, maxLife:life, x:gameState.player.x, y:gameState.player.y, facing:gameState.player.facing });
-}
-
-/* ---- 敵スポーン ---- */
-function pickSpawnX(){
-  const pts = DATA.config.spawnPoints;
-  const total = pts.reduce((s,p)=>s+p.weight,0);
-  let r = Math.random()*total;
-  for(const p of pts){ if(r<p.weight) return p.xRatio*LOGICAL_W; r-=p.weight; }
-  return LOGICAL_W/2;
-}
-function spawnEnemy(){
-  const def = gameState.enemyDef;
-  gameState.enemies.push({
-    x: pickSpawnX(), y:-20, vx:0, vy:0, radius:ENEMY_RADIUS,
-    hp: def.hp, maxHp: def.hp, atk: def.atk, atkInterval: def.atkIntervalSec*1000,
-    grounded:false, facing:1, lastAttackTime:-99999, aiTimer:0, dead:false, flash:0
-  });
-}
-
-/* ---- 物理・衝突 ---- */
-function applyPhysics(ent, dt){
-  ent.vy += GRAVITY*dt;
-  ent.x += ent.vx*dt;
-  ent.y += ent.vy*dt;
-  ent.vx *= Math.max(0, 1 - FRICTION_KNOCKBACK*dt/1000);
-
-  ent.grounded = false;
-  for(const plat of PLATFORMS){
-    if(ent.x+ent.radius*0.4 < plat.x1 || ent.x-ent.radius*0.4 > plat.x2) continue;
-    const feetY = ent.y + ent.radius;
-    const prevFeetY = feetY - ent.vy*dt;
-    if(ent.vy >= 0 && prevFeetY <= plat.y+2 && feetY >= plat.y){
-      ent.y = plat.y - ent.radius;
-      ent.vy = 0;
-      ent.grounded = true;
-    }
-  }
-  if(ent.x < ent.radius){ ent.x = ent.radius; }
-  if(ent.x > LOGICAL_W - ent.radius){ ent.x = LOGICAL_W - ent.radius; }
-}
-
-function updatePlayer(dt){
-  const p = gameState.player;
-  p.vx = gameState.input.dir * MOVE_SPEED;
-  if(gameState.input.dir !== 0) p.facing = gameState.input.dir;
-  p.x += p.vx*dt; // 移動は直接（ノックバックと分離）
-  p.vy += GRAVITY*dt;
-  p.y += p.vy*dt;
-
-  p.grounded = false;
-  for(const plat of PLATFORMS){
-    if(p.x+p.radius*0.4 < plat.x1 || p.x-p.radius*0.4 > plat.x2) continue;
-    const feetY = p.y + p.radius;
-    const prevFeetY = feetY - p.vy*dt;
-    if(p.vy >= 0 && prevFeetY <= plat.y+2 && feetY >= plat.y){
-      p.y = plat.y - p.radius;
-      p.vy = 0;
-      p.grounded = true;
-    }
-  }
-  if(p.x < p.radius) p.x = p.radius;
-  if(p.x > LOGICAL_W - p.radius) p.x = LOGICAL_W - p.radius;
-
-  if(p.y - p.radius > LOGICAL_H){ // 落下
-    endGame();
-  }
-}
-
-function updateEnemy(en, dt){
-  applyPhysics(en, dt);
-  if(en.y - en.radius > LOGICAL_H){ en.dead = true; en.deathAnim=0; onEnemyKilled(); return; }
-
-  en.aiTimer -= dt*1000;
-  if(en.aiTimer <= 0){
-    en.aiTimer = 500;
-    const p = gameState.player;
-    const fromIdx = getStandingPlatformIndex(en);
-    const toIdx = getStandingPlatformIndex(p);
-    const path = findPlatformPath(fromIdx, toIdx);
-
-    let targetX = p.x;
-    let wantJump = false;
-
-    if(path && path.length > 1){
-      const curPlat = PLATFORMS[fromIdx];
-      const nextPlat = PLATFORMS[path[1]];
-      const overlapMin = Math.max(curPlat.x1, nextPlat.x1);
-      const overlapMax = Math.min(curPlat.x2, nextPlat.x2);
-      if(overlapMin <= overlapMax){
-        targetX = Math.max(overlapMin, Math.min(overlapMax, p.x)); // 重なり範囲内でプレイヤーに近い位置を狙う
-      } else {
-        targetX = (nextPlat.x1 > curPlat.x2) ? curPlat.x2 : curPlat.x1; // 隙間がある場合は近い端へ回り込む
-      }
-      if(nextPlat.y < curPlat.y - 10) wantJump = true; // 次の足場が上にある＝ジャンプが必要
-    }
-
-    const dx = targetX - en.x;
-    en.aiDir = Math.abs(dx) > 4 ? Math.sign(dx) : 0;
-    en.facing = en.aiDir !== 0 ? en.aiDir : en.facing;
-    en.wantJump = wantJump;
-  }
-  if(en.wantJump && en.grounded){
-    en.vy = JUMP_VELOCITY;
-    en.grounded = false;
-  }
-  if(Math.abs(en.vx) < 20){ // ノックバック収まったら移動
-    en.x += (en.aiDir||0) * ENEMY_SPEED * dt;
-  }
-
-  // プレイヤーへの攻撃
-  const p = gameState.player;
-  const dist = Math.hypot(p.x-en.x, p.y-en.y);
-  if(dist < p.radius+en.radius+2){
-    const now = performance.now();
-    if(now - en.lastAttackTime >= en.atkInterval){
-      en.lastAttackTime = now;
-      gameState.hp = Math.max(0, gameState.hp - en.atk);
-      p.vx += Math.sign(p.x-en.x||1) * 180;
-      gameState.playerFlash = 0.15;
-      if(gameState.hp <= 0){ endGame(); }
-    }
-  }
 }
 
 /* ---- ゲームループ ---- */
 function loop(now){
   if(!gameState) return;
-  const dt = Math.min(0.05, (now - gameState.lastFrame)/1000);
+  const dt = Math.min(0.05, (now-gameState.lastFrame)/1000);
   gameState.lastFrame = now;
 
   if(!gameState.over){
-    gameState.survivalTime = (now - gameState.startTime)/1000;
+    gameState.survivalTime = (now-gameState.startTime)/1000;
 
-    // 難易度更新
     const newDiff = getDifficultyForTime(gameState.survivalTime);
-    if(newDiff !== gameState.difficulty){
-      gameState.difficulty = newDiff;
-      showCenterPopup(newDiff.icon+" "+newDiff.label, newDiff.label==="LIMIT BREAK"?2000:1000);
+    if(newDiff !== gameState.difficulty) gameState.difficulty = newDiff;
+
+    if(gameState.combo>0 && now-gameState.lastKillTime > DATA.config.comboTimeoutMs) gameState.combo = 0;
+
+    // 180秒イベント：暗闇リセット＋鬼の初出現
+    if(!gameState.bossEventTriggered && gameState.survivalTime >= DATA.map.boss.spawnTimeSec){
+      gameState.bossEventTriggered = true;
+      resetExploredExceptAround(gameState.player.x, gameState.player.y, VISION_RADIUS);
+      showCenterPopup("⚫ 周囲が再び暗闇に…", 2000);
+      spawnBoss();
+    }
+    if(gameState.bossEventTriggered && !gameState.boss){
+      if(gameState.bossRespawnTimer > 0) gameState.bossRespawnTimer -= dt;
+      else if(gameState.bossKills > 0) spawnBoss();
     }
 
-    // コンボ切れ
-    if(gameState.combo>0 && now - gameState.lastKillTime > DATA.config.comboTimeoutMs){
-      gameState.combo = 0;
-    }
-
-    // スポーン
+    // 通常の敵スポーン（従来の出現速度テーブルをそのまま使用）
     gameState.spawnTimer -= dt;
     const aliveCount = gameState.enemies.filter(e=>!e.dead).length;
     const maxE = gameState.difficulty.maxEnemies;
-    if(gameState.spawnTimer <= 0 && (maxE===null || aliveCount < maxE)){
+    if(gameState.spawnTimer<=0 && (maxE===null || aliveCount<maxE)){
       spawnEnemy();
       gameState.spawnTimer = gameState.difficulty.spawnInterval;
     }
 
-    updatePlayer(dt);
-    gameState.enemies.forEach(en=>{ if(!en.dead) updateEnemy(en, dt); });
+    // コインスポーン
+    gameState.coinSpawnTimer -= dt;
+    if(gameState.coinSpawnTimer<=0 && gameState.coins.length < DATA.map.coin.maxOnMap){
+      spawnCoin();
+      gameState.coinSpawnTimer = DATA.map.coin.spawnIntervalSec;
+    }
+
+    updatePlayerMove(dt, gameState.grid);
+    revealAround(gameState.player.x, gameState.player.y, VISION_RADIUS);
+
+    gameState.enemies.forEach(en=>{
+      if(en.dead){
+        en.deathAnim -= dt;
+        if(en.flash>0) en.flash -= dt;
+      } else {
+        updateChaser(en, ENEMY_SPEED, dt, gameState.grid);
+        handleContactDamage(en);
+        if(en.flash>0) en.flash -= dt;
+      }
+    });
     gameState.enemies = gameState.enemies.filter(en=>!(en.dead && en.deathAnim<=-0.3));
-    gameState.enemies.forEach(en=>{ if(en.dead) en.deathAnim -= dt; if(en.flash>0) en.flash-=dt; });
+
+    if(gameState.boss){
+      if(gameState.boss.dead){
+        gameState.boss.deathAnim -= dt;
+        if(gameState.boss.flash>0) gameState.boss.flash -= dt;
+        if(gameState.boss.deathAnim <= -0.3) gameState.boss = null;
+      } else {
+        updateChaser(gameState.boss, BOSS_SPEED, dt, gameState.grid);
+        handleContactDamage(gameState.boss);
+        if(gameState.boss.flash>0) gameState.boss.flash -= dt;
+      }
+    }
+
+    handleCoinPickup();
+    handleGateCheck();
 
     gameState.effects.forEach(fx=>fx.life-=dt);
     gameState.effects = gameState.effects.filter(fx=>fx.life>0);
 
-    if(gameState.playerFlash>0) gameState.playerFlash-=dt;
+    if(gameState.playerFlash>0) gameState.playerFlash -= dt;
 
-    updateTopUI(false);
+    updateTopUI();
   }
 
   render();
   rafId = requestAnimationFrame(loop);
 }
 
-function endGame(){
+function endGame(cleared){
   if(gameState.over) return;
   gameState.over = true;
+  gameState.cleared = !!cleared;
   cancelAnimationFrame(rafId);
-  setTimeout(()=> finishToResult(), 900);
+  setTimeout(()=> finishToResult(), cleared ? 500 : 900);
 }
 
 async function finishToResult(){
   const survivalTime = Math.floor(gameState.survivalTime*10)/10;
-  const score = Math.floor(survivalTime)*10 + gameState.kills*5 + gameState.maxCombo*2;
+  const score = Math.floor(survivalTime)*5 + gameState.kills*5 + gameState.coinScore + gameState.bossKills*DATA.map.boss.killScoreBonus;
   const r = await submitScore(score, gameState.kills, survivalTime);
 
+  document.getElementById("result-title").textContent = gameState.cleared ? "GAME CLEAR" : "GAME OVER";
   document.getElementById("result-score").textContent = score;
   document.getElementById("result-time").textContent = survivalTime.toFixed(1)+"秒";
   document.getElementById("result-kills").textContent = gameState.kills;
-  document.getElementById("result-combo").textContent = gameState.maxCombo;
+  document.getElementById("result-coins").textContent = gameState.coinScore + "（"+gameState.coinCount+"枚）";
+  document.getElementById("result-boss").textContent = gameState.bossKills;
   document.getElementById("result-newrecord").classList.toggle("hidden", !r.isNewRecord);
   showScreen("result");
 }
 
 /* ---- 描画 ---- */
 function render(){
-  ctx.clearRect(0,0,LOGICAL_W,LOGICAL_H);
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0,0,LOGICAL_W,LOGICAL_H);
+  ctx.clearRect(0,0,VIEWPORT_PX,VIEWPORT_PX);
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0,0,VIEWPORT_PX,VIEWPORT_PX);
+  if(!gameState) return;
 
-  // 足場
-  ctx.strokeStyle = "#111"; ctx.lineWidth=4; ctx.lineCap="round";
-  PLATFORMS.forEach(pl=>{
-    ctx.beginPath();
-    ctx.moveTo(pl.x1, pl.y);
-    ctx.lineTo(pl.x2, pl.y);
-    ctx.stroke();
+  const p = gameState.player;
+  const camX = p.x - VIEWPORT_PX/2;
+  const camY = p.y - VIEWPORT_PX/2;
+
+  const startCol = Math.floor(camX/TILE_SIZE)-1;
+  const endCol = Math.ceil((camX+VIEWPORT_PX)/TILE_SIZE)+1;
+  const startRow = Math.floor(camY/TILE_SIZE)-1;
+  const endRow = Math.ceil((camY+VIEWPORT_PX)/TILE_SIZE)+1;
+
+  for(let r=startRow; r<=endRow; r++){
+    if(r<0||r>=MAP_SIZE) continue;
+    for(let c=startCol; c<=endCol; c++){
+      if(c<0||c>=MAP_SIZE) continue;
+      if(!exploredGrid[r][c]) continue;
+      const sx = c*TILE_SIZE-camX, sy = r*TILE_SIZE-camY;
+      if(gameState.grid[r][c]===TILE.WALL){
+        ctx.fillStyle = "#d8d8d8";
+        ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(sx+0.5,sy+0.5,TILE_SIZE-1,TILE_SIZE-1);
+      } else {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(sx,sy,TILE_SIZE,TILE_SIZE);
+      }
+    }
+  }
+
+  gameState.coins.forEach(co=>{
+    if(!exploredGrid[co.r] || !exploredGrid[co.r][co.c]) return;
+    ctx.font = (TILE_SIZE*0.7)+"px sans-serif";
+    ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("🪙", co.x-camX, co.y-camY);
   });
 
-  // 敵
+  if(gameState.gate){
+    const g = gameState.gate;
+    if(exploredGrid[g.r] && exploredGrid[g.r][g.c]){
+      ctx.font = (TILE_SIZE*0.9)+"px sans-serif";
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText((DATA.map.gate?DATA.map.gate.emoji:"🚪"), g.x-camX, g.y-camY);
+    }
+  }
+
   gameState.enemies.forEach(en=>{
+    const t = tileOf(en.x,en.y);
+    if(!exploredGrid[t.r] || !exploredGrid[t.r][t.c]) return;
     ctx.save();
     let scale = 1;
     if(en.dead){ scale = Math.max(0, en.deathAnim/0.2); ctx.globalAlpha = scale; }
-    ctx.font = (38*scale)+"px sans-serif";
+    if(en.flash>0) ctx.filter = "brightness(1.8)";
+    ctx.font = (TILE_SIZE*scale)+"px sans-serif";
     ctx.textAlign="center"; ctx.textBaseline="middle";
-    if(en.flash>0){ ctx.filter = "brightness(1.8)"; }
-    ctx.fillText("👾", en.x, en.y);
+    ctx.fillText("👾", en.x-camX, en.y-camY);
     ctx.restore();
   });
 
-  // プレイヤー
-  const p = gameState.player;
+  if(gameState.boss){
+    const b = gameState.boss;
+    const t = tileOf(b.x,b.y);
+    if(exploredGrid[t.r] && exploredGrid[t.r][t.c]){
+      ctx.save();
+      let scale = 1;
+      if(b.dead){ scale = Math.max(0, b.deathAnim/0.3); ctx.globalAlpha = scale; }
+      if(b.flash>0) ctx.filter = "brightness(1.8)";
+      ctx.font = (TILE_SIZE*1.3*scale)+"px sans-serif";
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(DATA.map.boss.emoji, b.x-camX, b.y-camY);
+      ctx.restore();
+    }
+  }
+
   ctx.save();
-  if(gameState.playerFlash>0){ ctx.globalAlpha = 0.5; }
-  ctx.font = "41px sans-serif";
+  if(gameState.playerFlash>0) ctx.globalAlpha = 0.5;
+  ctx.font = (TILE_SIZE*1.1)+"px sans-serif";
   ctx.textAlign="center"; ctx.textBaseline="middle";
-  ctx.save();
-  ctx.translate(p.x, p.y);
-  ctx.scale(p.facing,1);
-  ctx.fillText(gameState.skin.emoji, 0, 0);
-  ctx.restore();
+  ctx.fillText(gameState.skin.emoji, VIEWPORT_PX/2, VIEWPORT_PX/2);
   ctx.restore();
 
-  // エフェクト
+  ctx.save();
+  ctx.fillStyle = "#e53935";
+  const dir = DIR_VECTORS[p.facing];
+  ctx.beginPath();
+  ctx.arc(VIEWPORT_PX/2+dir.x*TILE_SIZE*0.55, VIEWPORT_PX/2+dir.y*TILE_SIZE*0.55, 4, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
   gameState.effects.forEach(fx=>{
     ctx.save();
-    const t = 1 - fx.life/fx.maxLife;
     ctx.globalAlpha = fx.life/fx.maxLife;
-    ctx.font = (31+12*t)+"px sans-serif";
+    ctx.font = (TILE_SIZE*0.8)+"px sans-serif";
     ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.fillText(fx.text, fx.x + fx.facing*30, fx.y - 6);
+    ctx.fillText(fx.text, fx.x-camX, fx.y-camY);
     ctx.restore();
   });
 }
 
-function updateTopUI(reset){
+function updateTopUI(){
   const hpRatio = Math.max(0, gameState.hp/gameState.maxHp);
   document.getElementById("hp-bar").style.width = (hpRatio*100)+"%";
   document.getElementById("hp-text").textContent = Math.ceil(gameState.hp)+" / "+gameState.maxHp;
   document.getElementById("timer-display").textContent = gameState.survivalTime.toFixed(1);
   document.getElementById("kill-count").textContent = gameState.kills;
+  document.getElementById("coin-count").textContent = gameState.coinScore;
   document.getElementById("combo-display").textContent = gameState.combo>1 ? (gameState.combo+" combo") : "";
   document.getElementById("difficulty-display").textContent = gameState.difficulty.icon+" "+gameState.difficulty.label;
   const gaugeEl = document.getElementById("gauge-bar");
