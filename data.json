@@ -74,8 +74,8 @@
     "plazaCount": 5,
     "plazaSize": 3,
     "loopChance": 0.2,
-    "playerSpeedTilesPerSec": 3,
-    "enemySpeedTilesPerSec": 4,
+    "playerSpeedTilesPerSec": 3.5,
+    "enemySpeedTilesPerSec": 3.5,
     "enemyMinDistanceTiles": 4,
     "exploredRatioThreshold": 0.5,
     "coin": {
@@ -96,11 +96,28 @@
       "hp": 50,
       "atk": 15,
       "atkIntervalSec": 2.0,
-      "speedTilesPerSec": 3,
+      "speedTilesPerSec": 3.5,
       "spawnTimeSec": 180,
       "respawnCooldownSec": 60,
       "killScoreBonus": 200
     },
-    "gate": { "emoji": "🚪" }
+    "gate": { "emoji": "🚪" },
+    "chest": {
+      "emoji": "📦",
+      "spawnIntervalSec": 30,
+      "maxOnMap": 3,
+      "minDistanceTiles": 20,
+      "openRadiusTiles": 2,
+      "openTimeSec": 3,
+      "rewardValues": {
+        "coinScore": 70,
+        "healAmount": 30,
+        "speedBoostTilesPerSec": 5.0,
+        "speedBoostDurationSec": 8,
+        "freezeDurationSec": 3,
+        "bombDamage": 30,
+        "bombRadiusTiles": 6
+      }
+    }
   }
 }
