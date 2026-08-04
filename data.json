@@ -65,5 +65,42 @@
       { "pos": "center", "xRatio": 0.5,  "weight": 50 },
       { "pos": "right",  "xRatio": 0.85, "weight": 25 }
     ]
+  },
+  "map": {
+    "tileSize": 38,
+    "mapSize": 64,
+    "viewTiles": 17,
+    "visionRadiusTiles": 2,
+    "plazaCount": 5,
+    "plazaSize": 3,
+    "loopChance": 0.2,
+    "playerSpeedTilesPerSec": 3,
+    "enemySpeedTilesPerSec": 4,
+    "enemyMinDistanceTiles": 4,
+    "exploredRatioThreshold": 0.5,
+    "coin": {
+      "spawnIntervalSec": 10,
+      "maxOnMap": 10,
+      "minDistanceTiles": 10,
+      "values": [
+        { "value": 10,  "weight": 50 },
+        { "value": 50,  "weight": 25 },
+        { "value": 100, "weight": 25 }
+      ]
+    },
+    "boss": {
+      "id": "boss_oni",
+      "name": "鬼",
+      "emoji": "👹",
+      "weaponEmoji": "🔨",
+      "hp": 50,
+      "atk": 15,
+      "atkIntervalSec": 2.0,
+      "speedTilesPerSec": 3,
+      "spawnTimeSec": 180,
+      "respawnCooldownSec": 60,
+      "killScoreBonus": 200
+    },
+    "gate": { "emoji": "🚪" }
   }
 }
