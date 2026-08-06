@@ -56,7 +56,7 @@
   "config": {
     "specialGaugePerKill": 25,
     "comboTimeoutMs": 3000,
-    "pointsPerScoreDivisor": 10,
+    "pointsPerScoreDivisor": 2,
     "gachaCostPoints": 1000,
     "maxCostTotal": 10,
     "playerHp": 100,
@@ -71,6 +71,7 @@
     "mapSize": 64,
     "viewTiles": 17,
     "visionRadiusTiles": 2,
+    "enemyWarningRadiusTiles": 8,
     "plazaCount": 5,
     "plazaSize": 3,
     "loopChance": 0.2,
